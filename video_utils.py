@@ -17,23 +17,25 @@ def get_clip_path(video_url: str, start_sec: float, end_sec: float) -> Path:
 
 def extract_clip(
     video_url: str,
-    start_sec: float,
-    end_sec: float,
-    pad_before: float = -25.0,
-    pad_after: float = 35.0,
+    video_start_sec: float,
+    video_end_sec: float,
+    pad_before: float = 2.0,
+    pad_after: float = 30.0,
 ) -> Path:
-    """Extract a clip from a remote video URL. Returns path to the clip mp4.
+    """Extract a clip from a video. Returns path to the cached clip mp4.
 
-    Uses ffmpeg with input seeking (-ss before -i) so it issues an HTTP range
-    request and only downloads the bytes it needs. Requires the remote mp4 to
-    be faststart-encoded (moov atom at the beginning of the file).
+    video_start_sec: video timestamp where corner is awarded
+    video_end_sec: video timestamp where corner possession ends
 
-    Clips are cached in the system temp directory so repeated requests are instant.
+    The clip starts 2s before the award (context) and runs 30s past
+    the possession end to capture the full delivery + outcome sequence.
+    Corner delivery typically happens 15-25s after the award in the video.
     """
-    actual_start = max(0, start_sec - pad_before)
-    duration = (end_sec + pad_after) - actual_start
+    actual_start = max(0, video_start_sec - pad_before)
+    actual_end = video_end_sec + pad_after
+    duration = actual_end - actual_start
 
-    clip_path = get_clip_path(video_url, actual_start, actual_start + duration)
+    clip_path = get_clip_path(video_url, actual_start, actual_end)
 
     if clip_path.exists():
         return clip_path
