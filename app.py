@@ -79,7 +79,9 @@ def load_role_model():
         model.fit(fdf[V6_FEAT_COLS].values, fdf["gt_role"].values)
         return model, V6_FEAT_COLS
     except Exception as e:
-        st.warning(f"Could not load role detection model: {e}")
+        import traceback
+        traceback.print_exc()
+        st.error(f"Could not load role detection model: {e}")
         return None, None
 
 
