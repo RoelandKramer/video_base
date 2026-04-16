@@ -1,4 +1,4 @@
-"""Parse SciSports XML/JSON event files to extract corner kick events with video timestamps."""
+"""Parse SciSports JSON event files and XML video timestamp files."""
 
 import json
 import re
@@ -7,201 +7,247 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+# ================================================================
+# DATA CLASSES
+# ================================================================
+
 @dataclass
-class Corner:
+class Event:
+    """A single match event with both game-clock and video timestamps."""
+    event_type: str        # e.g. "corner", "shot", "goal_kick"
+    sub_type: str          # e.g. "CORNER_CROSSED", "ON_TARGET"
     team: str
     player: str
-    video_start_sec: float  # video timestamp: corner awarded
-    video_end_sec: float    # video timestamp: possession ends
-    game_time_ms: int       # JSON startTimeMs (used for role detection)
-    label: str
+    game_time_ms: int
+    video_time_sec: float  # seconds into the mp4 file
+    result: str            # SUCCESSFUL / UNSUCCESSFUL
+    receiver: str = ""
+    start_x: float = 0.0
+    start_y: float = 0.0
+    end_x: float = 0.0
+    end_y: float = 0.0
+    xg: float = 0.0
+    body_part: str = ""
+    sequence_id: int = -1
+    labels: list = field(default_factory=list)
 
     @property
-    def start_display(self) -> str:
-        """Display the game-clock time of the delivery."""
-        total_sec = self.game_time_ms // 1000
-        m, s = divmod(total_sec, 60)
+    def game_time_display(self) -> str:
+        m, s = divmod(self.game_time_ms // 1000, 60)
         return f"{m}:{s:02d}"
+
+    @property
+    def label(self) -> str:
+        return f"{self.game_time_display} — {self.team} — {self.player}"
 
 
 @dataclass
 class Match:
     name: str
     match_id: int
-    xml_path: Path
-    json_path: Path | None
-    cameras: dict[str, str]  # camera name -> video URL/path
-    corners: list[Corner] = field(default_factory=list)
-    home_team: str = ""
-    away_team: str = ""
+    home_team: str
+    away_team: str
+    cameras: dict[str, str]
+    events: list[Event] = field(default_factory=list)
+    video_offset: float = 0.0  # seconds to add to game-clock for video seeking
 
 
-def _sanitize_xml(content: str) -> str:
-    return re.sub(r"[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF\u0100-\uFFFF]", "", content)
+# ================================================================
+# EVENT TYPE MAPPING
+# ================================================================
+
+# Map JSON (baseTypeName, subTypeName) to our event categories
+EVENT_MAP = {
+    # Corners
+    ("CROSS", "CORNER_CROSSED"): "corner",
+    ("PASS", "CORNER_SHORT"): "corner",
+    # Goal kicks
+    ("PASS", "GOAL_KICK"): "goal_kick",
+    # Free kicks (the pass/cross/shot from the free kick, not the award)
+    ("PASS", "FREE_KICK"): "free_kick",
+    ("CROSS", "FREE_KICK_CROSSED"): "free_kick",
+    ("SHOT", "SHOT_FREE_KICK"): "free_kick",
+    # Crosses (excluding corners and FK crosses)
+    ("CROSS", "CROSS"): "cross",
+    ("CROSS", "CROSS_CUTBACK"): "cross",
+    # Shots (all types)
+    ("SHOT", "SHOT"): "shot",
+    ("SHOT", "SHOT_FREE_KICK"): "shot",
+    # Recoveries
+    ("INTERCEPTION", "RECOVERY"): "recovery",
+    # Interceptions
+    ("INTERCEPTION", "INTERCEPTION"): "interception",
+}
 
 
-def _parse_xml_corners(xml_path: Path) -> list[dict]:
-    """Extract Set Piece: Corner events from XML with video timestamps."""
-    content = xml_path.read_text(encoding="utf-8")
-    content = _sanitize_xml(content)
-    root = ET.fromstring(content)
+def _classify_shot(event: dict) -> list[str]:
+    """Return all shot categories this event belongs to."""
+    cats = ["shot"]
+    result = event.get("resultName", "")
+    shot_type = event.get("shotTypeName", "")
+    xg = event.get("metrics", {}).get("xG", 0)
 
-    # Get Possession: corner events (wider time window than Set Piece)
-    possession_windows = []
-    for inst in root.findall(".//instance"):
-        code_el = inst.find("code")
-        if code_el is None or code_el.text is None:
-            continue
-        if "Possession: corner" in code_el.text:
-            start = float(inst.find("start").text)
-            end = float(inst.find("end").text)
-            team = code_el.text.split(" - Possession")[0]
-            possession_windows.append({"start": start, "end": end, "team": team})
-
-    # Get Set Piece: Corner events (have player info)
-    setpiece_corners = []
-    for inst in root.findall(".//instance"):
-        code_el = inst.find("code")
-        if code_el is None or code_el.text is None:
-            continue
-        if "Set Piece: Corner" not in code_el.text:
-            continue
-
-        start = float(inst.find("start").text)
-        team = code_el.text.split(" - Set Piece")[0]
-
-        player = ""
-        for lbl in inst.findall("label"):
-            group_el = lbl.find("group")
-            if group_el is not None and group_el.text == "Player":
-                text_el = lbl.find("text")
-                if text_el is not None and text_el.text:
-                    player = text_el.text
-
-        # Find matching possession window (same team, close start time)
-        poss_end = start + 10  # fallback
-        for pw in possession_windows:
-            if pw["team"] == team and abs(pw["start"] - start) < 2:
-                poss_end = pw["end"]
-                break
-
-        setpiece_corners.append({
-            "video_start": start,
-            "video_end": poss_end,
-            "team": team,
-            "player": player,
-        })
-
-    return setpiece_corners
+    if result == "SUCCESSFUL":
+        cats.append("goal")
+    if shot_type == "ON_TARGET" or result == "SUCCESSFUL":
+        cats.append("shot_on_target")
+    if xg >= 0.3:
+        cats.append("big_chance")
+    return cats
 
 
-def _parse_json_corners(json_path: Path) -> list[dict]:
-    """Extract CORNER_CROSSED/SHORT from JSON with game-clock timestamps."""
+# ================================================================
+# PARSING
+# ================================================================
+
+def _load_json_events(json_path: Path) -> tuple[list[Event], dict]:
+    """Parse all relevant events from a SciSports JSON events file."""
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    corners = []
+    meta = data.get("metaData", {})
+    events = []
+
+    # Build corner sequence IDs for linking shots/clearances to corners
+    corner_sequences = set()
     for ev in data.get("data", []):
-        if ev.get("subTypeName") in ("CORNER_CROSSED", "CORNER_SHORT"):
-            corners.append({
-                "game_time_ms": ev["startTimeMs"],
-                "team": ev["teamName"],
-                "player": ev["playerName"],
-            })
-    return corners
+        if "CORNER" in ev.get("subTypeName", ""):
+            if ev.get("sequenceId", -1) >= 0:
+                corner_sequences.add(ev["sequenceId"])
+
+    for ev in data.get("data", []):
+        base = ev.get("baseTypeName", "")
+        sub = ev.get("subTypeName", "")
+        key = (base, sub)
+
+        if key not in EVENT_MAP:
+            continue
+
+        event_type = EVENT_MAP[key]
+        metrics = ev.get("metrics", {})
+
+        event = Event(
+            event_type=event_type,
+            sub_type=sub,
+            team=ev.get("teamName", ""),
+            player=ev.get("playerName", ""),
+            game_time_ms=ev.get("startTimeMs", 0),
+            video_time_sec=0.0,  # filled later
+            result=ev.get("resultName", ""),
+            receiver=ev.get("receiverName", ""),
+            start_x=ev.get("startPosXM", 0.0),
+            start_y=ev.get("startPosYM", 0.0),
+            end_x=ev.get("endPosXM", 0.0),
+            end_y=ev.get("endPosYM", 0.0),
+            xg=metrics.get("xG", 0.0),
+            body_part=ev.get("bodyPartName", ""),
+            sequence_id=ev.get("sequenceId", -1),
+            labels=ev.get("labels", []),
+        )
+        events.append(event)
+
+        # For shots, also add to goal/on_target/big_chance categories
+        if base == "SHOT":
+            extra_cats = _classify_shot(ev)
+            for cat in extra_cats:
+                if cat != "shot":
+                    extra = Event(
+                        event_type=cat,
+                        sub_type=sub,
+                        team=ev.get("teamName", ""),
+                        player=ev.get("playerName", ""),
+                        game_time_ms=ev.get("startTimeMs", 0),
+                        video_time_sec=0.0,
+                        result=ev.get("resultName", ""),
+                        receiver=ev.get("receiverName", ""),
+                        start_x=ev.get("startPosXM", 0.0),
+                        start_y=ev.get("startPosYM", 0.0),
+                        end_x=ev.get("endPosXM", 0.0),
+                        end_y=ev.get("endPosYM", 0.0),
+                        xg=metrics.get("xG", 0.0),
+                        body_part=ev.get("bodyPartName", ""),
+                        sequence_id=ev.get("sequenceId", -1),
+                        labels=ev.get("labels", []),
+                    )
+                    events.append(extra)
+
+    return events, {"meta": meta, "corner_sequences": corner_sequences, "raw": data}
 
 
-def _match_xml_json_corners(xml_corners: list[dict], json_corners: list[dict]) -> list[Corner]:
-    """Match XML (video timestamps) with JSON (game-clock timestamps) by order.
-
-    Both sources list corners in chronological order for the same match,
-    so we align them by index. The ~3s systematic offset confirms they
-    describe the same events.
-    """
-    corners = []
-    for idx, xc in enumerate(xml_corners):
-        # Find matching JSON corner (same team, closest by index)
-        jc = None
-        if idx < len(json_corners):
-            jc = json_corners[idx]
-
-        game_time_ms = jc["game_time_ms"] if jc else 0
-        total_sec = game_time_ms // 1000
-        m, s = divmod(total_sec, 60)
-
-        label = f"Corner #{idx+1} — {xc['team']} — {xc['player']} ({m}:{s:02d})"
-
-        corners.append(Corner(
-            team=xc["team"],
-            player=xc["player"],
-            video_start_sec=xc["video_start"],
-            video_end_sec=xc["video_end"],
-            game_time_ms=game_time_ms,
-            label=label,
-        ))
-
-    return corners
+def _compute_video_times(events: list[Event], video_offset: float):
+    """Convert game-clock ms to video timestamps using the offset."""
+    for ev in events:
+        ev.video_time_sec = ev.game_time_ms / 1000.0 + video_offset
 
 
-def _load_video_config(data_dir: Path) -> dict[str, dict[str, str]]:
+# ================================================================
+# MATCH DISCOVERY
+# ================================================================
+
+def _load_video_config(data_dir: Path) -> dict:
     videos_file = data_dir / "videos.json"
     if not videos_file.exists():
         return {}
     return json.loads(videos_file.read_text(encoding="utf-8"))
 
 
-def _extract_match_id(filename: str) -> int | None:
-    """Extract numeric match ID from filename like '... - 2561462.json'."""
-    parts = filename.split(" - ")
-    if len(parts) >= 2:
-        try:
-            return int(parts[-1].replace(".json", "").replace(".xml", "").strip())
-        except ValueError:
-            pass
-    return None
-
-
 def discover_matches(data_dir: Path) -> list[Match]:
-    """Scan a directory for XML + JSON + video config and build match objects."""
+    """Scan directory for JSON event files and build match objects."""
     video_config = _load_video_config(data_dir)
     matches = []
 
-    for xml_file in sorted(data_dir.glob("*SciSportsEvents XML*.xml")):
-        stem = xml_file.stem
+    for json_file in sorted(data_dir.glob("*SciSportsEvents - *.json")):
+        stem = json_file.stem
         match_prefix = stem.split("SciSportsEvents")[0].strip()
-        match_id = _extract_match_id(stem)
 
-        # Find matching JSON events file
-        json_path = None
-        for jp in data_dir.glob(f"{match_prefix} SciSportsEvents - *.json"):
-            json_path = jp
-            break
+        # Extract match ID
+        match_id = 0
+        parts = stem.split(" - ")
+        if len(parts) >= 2:
+            try:
+                match_id = int(parts[-1])
+            except ValueError:
+                pass
 
-        # Parse corners
-        xml_corners = _parse_xml_corners(xml_file)
-        json_corners = _parse_json_corners(json_path) if json_path else []
-        corners = _match_xml_json_corners(xml_corners, json_corners)
+        # Load config for this match
+        match_config = video_config.get(match_prefix, {})
+        cameras = {k: v for k, v in match_config.items() if k != "offset"}
+        video_offset = match_config.get("offset", 0.0)
 
-        # Load match metadata from JSON
-        home_team = away_team = ""
-        if json_path:
-            with open(json_path, "r", encoding="utf-8") as f:
-                meta = json.load(f).get("metaData", {})
-            home_team = meta.get("homeTeamName", "")
-            away_team = meta.get("awayTeamName", "")
+        # Parse events
+        events, extra = _load_json_events(json_file)
+        _compute_video_times(events, video_offset)
 
-        cameras = video_config.get(match_prefix, {})
-        name = match_prefix.strip()
+        meta = extra["meta"]
 
         matches.append(Match(
-            name=name,
-            match_id=match_id or 0,
-            xml_path=xml_file,
-            json_path=json_path,
+            name=match_prefix,
+            match_id=match_id,
+            home_team=meta.get("homeTeamName", ""),
+            away_team=meta.get("awayTeamName", ""),
             cameras=cameras,
-            corners=corners,
-            home_team=home_team,
-            away_team=away_team,
+            events=events,
+            video_offset=video_offset,
         ))
 
     return matches
+
+
+def get_events_by_type(match: Match, event_type: str) -> list[Event]:
+    """Filter match events by type, sorted by game time."""
+    return sorted(
+        [e for e in match.events if e.event_type == event_type],
+        key=lambda e: e.game_time_ms,
+    )
+
+
+def get_corner_sequences(json_path: Path) -> set[int]:
+    """Get sequence IDs that belong to corners."""
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    seqs = set()
+    for ev in data.get("data", []):
+        if "CORNER" in ev.get("subTypeName", ""):
+            if ev.get("sequenceId", -1) >= 0:
+                seqs.add(ev["sequenceId"])
+    return seqs
