@@ -20,6 +20,7 @@ EVENT_TYPES = {
     "Goal Kicks": "goal_kick",
     "Free Kicks": "free_kick",
     "Crosses": "cross",
+    "Key Passes": "key_pass",
     "Goals": "goal",
     "Shots on Target": "shot_on_target",
     "Shots Total": "shot",
@@ -27,6 +28,8 @@ EVENT_TYPES = {
     "Ball Recoveries": "recovery",
     "Interceptions": "interception",
 }
+
+BOTH_LABEL = "Both"
 
 # SciSports pitch half-lengths (standard)
 PITCH_X = 52.5
@@ -182,8 +185,10 @@ def _build_corner_zones(top_x=PITCH_X, left_y=-PITCH_Y):
     edge_x = top_x - (length_PA + 4)
     GA_band = width_PB / 3
 
+    # For TL corner (left_y=-34): Short_Corner_Zone is the strip from the corner flag
+    # to the near edge of the 18-yd box (y in [-34, -20.16]), NOT spanning to +half_PA.
     zones_TL = {
-        "Short_Corner_Zone": [(top_x, left_y), (top_x, half_PA), (PA_x, left_y), (PA_x, half_PA)],
+        "Short_Corner_Zone": [(top_x, left_y), (top_x, -half_PA), (PA_x, left_y), (PA_x, -half_PA)],
         "Front_Zone": [(top_x, half_PA), (top_x, half_PB), (PA_x, half_PB), (PA_x, half_PA)],
         "Back_Zone": [(top_x, -half_PB), (top_x, -half_PA), (PA_x, -half_PA), (PA_x, -half_PB)],
         "GA1": [(top_x, half_PB), (top_x, half_PB - GA_band), (PB_x, half_PB - GA_band), (PB_x, half_PB)],
@@ -340,7 +345,7 @@ def _render_corner_side(side_classified, side, img_path, zone_pixels, zone_cente
 
 
 def viz_corners(events, team, match):
-    team_events = [e for e in events if e.team == team]
+    team_events = list(events) if team == BOTH_LABEL else [e for e in events if e.team == team]
     zones_by_pos = _build_corner_zones()
 
     classified = []  # (event, side, zone)
@@ -350,9 +355,11 @@ def viz_corners(events, team, match):
             pos = "top_left" if e.start_y < 0 else "top_right"
         side = "L" if "left" in pos else "R"
         zones = zones_by_pos[pos]
-        zone = _assign_zone(e.end_x, e.end_y, zones)
-        if zone is None and e.sub_type == "CORNER_SHORT":
+        # CORNER_SHORT is always a short-corner pass regardless of end location
+        if e.sub_type == "CORNER_SHORT":
             zone = "Short_Corner_Zone"
+        else:
+            zone = _assign_zone(e.end_x, e.end_y, zones)
         classified.append((e, side, zone))
 
     left = [c for c in classified if c[1] == "L"]
@@ -371,8 +378,11 @@ def viz_corners(events, team, match):
     st.markdown("**Corners Leading to Shot**")
     all_shots = [e for e in match.events if e.event_type == "shot"]
     corner_seqs = {e.sequence_id for e in events if e.sequence_id >= 0}
-    shots_from_corners = [s for s in all_shots if s.sequence_id in corner_seqs
-                          and s.team == team]
+    if team == BOTH_LABEL:
+        shots_from_corners = [s for s in all_shots if s.sequence_id in corner_seqs]
+    else:
+        shots_from_corners = [s for s in all_shots if s.sequence_id in corner_seqs
+                              and s.team == team]
     if shots_from_corners:
         shooter_counts = Counter(s.player for s in shots_from_corners)
         for player, count in shooter_counts.most_common():
@@ -388,7 +398,7 @@ def viz_corners(events, team, match):
 # ================================================================
 
 def viz_goal_kicks(events, team, match):
-    team_events = [e for e in events if e.team == team]
+    team_events = list(events) if team == BOTH_LABEL else [e for e in events if e.team == team]
     if not team_events:
         st.info(f"No goal kicks by {team}.")
         return
@@ -466,7 +476,7 @@ def viz_goal_kicks(events, team, match):
 # ================================================================
 
 def viz_free_kicks(events, team, match):
-    team_events = [e for e in events if e.team == team]
+    team_events = list(events) if team == BOTH_LABEL else [e for e in events if e.team == team]
     if not team_events:
         st.info(f"No free kicks by {team}.")
         return
@@ -554,7 +564,7 @@ def viz_free_kicks(events, team, match):
 # ================================================================
 
 def viz_crosses(events, team, match):
-    team_events = [e for e in events if e.team == team]
+    team_events = list(events) if team == BOTH_LABEL else [e for e in events if e.team == team]
     if not team_events:
         st.info(f"No crosses by {team}.")
         return
@@ -626,53 +636,45 @@ def viz_crosses(events, team, match):
 # ================================================================
 
 def viz_goals(events, team, match):
-    team_events = [e for e in events if e.team == team]
-    opp_events = [e for e in events if e.team != team]
+    # Split events into two groups. In Both mode, split by home vs away teams.
+    if team == BOTH_LABEL:
+        group_a = [e for e in events if e.team == match.home_team]
+        group_b = [e for e in events if e.team == match.away_team]
+        label_a, label_b = match.home_team, match.away_team
+        title = f"Goals Map ({match.home_team} vs {match.away_team})"
+    else:
+        group_a = [e for e in events if e.team == team]
+        group_b = [e for e in events if e.team != team]
+        label_a, label_b = team, "Opponent"
+        title = f"Goals Map ({team} vs Opponent)"
 
-    st.markdown(f"**Goals Map ({team} vs Opponent)**")
+    st.markdown(f"**{title}**")
 
-    img = Image.open(_PITCH_IMG_PATH)
-    fig = go.Figure()
-    fig.update_layout(
-        xaxis=dict(range=[0, img.width], visible=False),
-        yaxis=dict(range=[img.height, 0], visible=False, scaleanchor="x"),
-        margin=dict(l=0, r=0, t=20, b=0),
-        height=640, showlegend=True,
-        legend=dict(bgcolor="rgba(255,255,255,0.8)", font=dict(size=10)),
-        plot_bgcolor="white",
-    )
-    fig.add_layout_image(dict(
-        source=img, xref="x", yref="y", x=0, y=0,
-        sizex=img.width, sizey=img.height,
-        sizing="stretch", opacity=1, layer="below"))
+    # Zoomed attacking-third pitch (x ∈ [15, 52.5])
+    fig = _plotly_pitch(fig_height=500, xrange=(15, 52.5), yrange=(-34, 34))
 
-    # Build lookup to raw JSON data via match.events (same sequence for assist)
-    # Best-effort assist: find nearest CROSS/PASS in same sequence just before the goal
     def find_assist(goal):
         cand = [x for x in match.events
                 if x.sequence_id == goal.sequence_id
                 and x.team == goal.team
                 and x.game_time_ms < goal.game_time_ms
-                and x.event_type in ("cross", "free_kick", "goal_kick", "corner")]
+                and x.event_type in ("cross", "free_kick", "goal_kick", "corner", "key_pass")]
         cand.sort(key=lambda x: x.game_time_ms)
         return cand[-1] if cand else None
 
-    # Track which group each trace index corresponds to
     trace_groups = []
 
     def add_goal_trace(evts, color, name):
         xs, ys, cds, hovers = [], [], [], []
         for i, e in enumerate(evts):
             x, y = _normalize_pos(e.start_x, e.start_y)
-            col, row = _sci_to_pixel(x, y)
-            xs.append(col); ys.append(row); cds.append(i)
+            xs.append(x); ys.append(y); cds.append(i)
             hovers.append(f"{e.game_time_display} - {e.player}<br>xG: {e.xg:.2f}")
             assist = find_assist(e)
             if assist:
                 ax_, ay_ = _normalize_pos(assist.start_x, assist.start_y)
-                acol, arow = _sci_to_pixel(ax_, ay_)
                 fig.add_annotation(
-                    x=col, y=row, ax=acol, ay=arow,
+                    x=x, y=y, ax=ax_, ay=ay_,
                     xref="x", yref="y", axref="x", ayref="y",
                     arrowhead=2, arrowsize=1.5, arrowwidth=2.5,
                     arrowcolor=color, showarrow=True, text="",
@@ -686,8 +688,10 @@ def viz_goals(events, team, match):
             ))
             trace_groups.append(evts)
 
-    add_goal_trace(team_events, "#27ae60", team)
-    add_goal_trace(opp_events, "#95a5a6", "Opponent")
+    add_goal_trace(group_a, "#27ae60", label_a)
+    add_goal_trace(group_b, "#f1c40f" if team == BOTH_LABEL else "#95a5a6", label_b)
+    fig.update_layout(showlegend=True,
+                      legend=dict(bgcolor="rgba(0,0,0,0.3)", font=dict(color="white")))
 
     result = st.plotly_chart(fig, use_container_width=True, key="goals_map",
                              on_select="rerun", selection_mode="points")
@@ -709,7 +713,7 @@ def viz_goals(events, team, match):
     # List view
     st.markdown("---")
     st.markdown("**Goal Clips**")
-    for e in team_events + opp_events:
+    for e in group_a + group_b:
         assist = find_assist(e)
         label = f"{e.game_time_display} - {e.team} - {e.player} (xG: {e.xg:.2f})"
         if assist:
@@ -722,8 +726,16 @@ def viz_goals(events, team, match):
 # ================================================================
 
 def viz_shots(events, team, match, title="Shots"):
-    team_events = [e for e in events if e.team == team]
-    opp_events = [e for e in events if e.team != team]
+    if team == BOTH_LABEL:
+        group_a = [e for e in events if e.team == match.home_team]
+        group_b = [e for e in events if e.team == match.away_team]
+        label_a, label_b = match.home_team, match.away_team
+        color_a, color_b = "#e74c3c", "#f1c40f"
+    else:
+        group_a = [e for e in events if e.team == team]
+        group_b = [e for e in events if e.team != team]
+        label_a, label_b = team, "Opponent"
+        color_a, color_b = "#e74c3c", "#95a5a6"
 
     half_filter = st.radio("Half", ["All", "1st Half", "2nd Half"],
                            horizontal=True, key=f"half_{title}")
@@ -735,25 +747,14 @@ def viz_shots(events, team, match, title="Shots"):
             return [e for e in es if e.game_time_ms >= 45 * 60 * 1000]
         return es
 
-    team_f = filt(team_events)
-    opp_f = filt(opp_events)
+    a_f = filt(group_a)
+    b_f = filt(group_b)
 
-    st.markdown(f"**{title} Map - {team} ({len(team_f)}) vs Opp ({len(opp_f)})**")
+    st.markdown(f"**{title} Map - {label_a} ({len(a_f)}) vs {label_b} ({len(b_f)})**")
     st.caption("Click a shot to watch the clip")
 
-    img = Image.open(_PITCH_IMG_PATH)
-    fig = go.Figure()
-    fig.update_layout(
-        xaxis=dict(range=[0, img.width], visible=False),
-        yaxis=dict(range=[img.height, 0], visible=False, scaleanchor="x"),
-        margin=dict(l=0, r=0, t=20, b=0),
-        height=640, showlegend=True,
-        legend=dict(bgcolor="rgba(255,255,255,0.8)", font=dict(size=10)),
-        plot_bgcolor="white",
-    )
-    fig.add_layout_image(dict(source=img, xref="x", yref="y", x=0, y=0,
-                              sizex=img.width, sizey=img.height,
-                              sizing="stretch", opacity=1, layer="below"))
+    # Zoomed attacking-third pitch
+    fig = _plotly_pitch(fig_height=500, xrange=(15, 52.5), yrange=(-34, 34))
 
     trace_groups = []
 
@@ -761,9 +762,8 @@ def viz_shots(events, team, match, title="Shots"):
         xs, ys, sizes, cds, hovers, symbols = [], [], [], [], [], []
         for i, e in enumerate(evts):
             x, y = _normalize_pos(e.start_x, e.start_y)
-            col, row = _sci_to_pixel(x, y)
-            xs.append(col); ys.append(row)
-            sizes.append(max(10, e.xg * 120))
+            xs.append(x); ys.append(y)
+            sizes.append(max(10, e.xg * 80))
             cds.append(i)
             sym = "star" if e.result == "SUCCESSFUL" else "circle"
             symbols.append(sym)
@@ -779,8 +779,10 @@ def viz_shots(events, team, match, title="Shots"):
             ))
             trace_groups.append(evts)
 
-    add_trace(opp_f, "#95a5a6", "Opponent", alpha=0.5)
-    add_trace(team_f, "#e74c3c", team, alpha=0.95)
+    add_trace(b_f, color_b, label_b, alpha=0.75 if team == BOTH_LABEL else 0.5)
+    add_trace(a_f, color_a, label_a, alpha=0.95)
+    fig.update_layout(showlegend=True,
+                      legend=dict(bgcolor="rgba(0,0,0,0.3)", font=dict(color="white")))
 
     result = st.plotly_chart(fig, use_container_width=True, key=f"shot_map_{title}",
                              on_select="rerun", selection_mode="points")
@@ -801,13 +803,11 @@ def viz_shots(events, team, match, title="Shots"):
                         _jump_to_event(group[pidx], events)
 
     # Metrics
-    total_xg_t = sum(e.xg for e in team_f)
-    total_xg_o = sum(e.xg for e in opp_f)
     cols = st.columns(4)
-    cols[0].metric(f"{team} Shots", len(team_f))
-    cols[1].metric(f"{team} xG", f"{total_xg_t:.2f}")
-    cols[2].metric("Opp Shots", len(opp_f))
-    cols[3].metric("Opp xG", f"{total_xg_o:.2f}")
+    cols[0].metric(f"{label_a} Shots", len(a_f))
+    cols[1].metric(f"{label_a} xG", f"{sum(e.xg for e in a_f):.2f}")
+    cols[2].metric(f"{label_b} Shots", len(b_f))
+    cols[3].metric(f"{label_b} xG", f"{sum(e.xg for e in b_f):.2f}")
 
 
 # ================================================================
@@ -815,10 +815,16 @@ def viz_shots(events, team, match, title="Shots"):
 # ================================================================
 
 def viz_big_chances(events, team, match):
-    team_events = [e for e in events if e.team == team]
-    opp_events = [e for e in events if e.team != team]
+    if team == BOTH_LABEL:
+        team_events = [e for e in events if e.team == match.home_team]
+        opp_events = [e for e in events if e.team == match.away_team]
+        label_a, label_b = match.home_team, match.away_team
+    else:
+        team_events = [e for e in events if e.team == team]
+        opp_events = [e for e in events if e.team != team]
+        label_a, label_b = team, "Opponent"
 
-    st.markdown(f"**Big Chances Timeline ({team} vs Opponent)**")
+    st.markdown(f"**Big Chances Timeline ({label_a} vs {label_b})**")
 
     fig = go.Figure()
 
@@ -850,8 +856,8 @@ def viz_big_chances(events, team, match):
             ))
             trace_groups.append(evts)
 
-    add_chances(team_events, 0.5, "#e74c3c", team)
-    add_chances(opp_events, -0.5, "#95a5a6", "Opponent")
+    add_chances(team_events, 0.5, "#e74c3c", label_a)
+    add_chances(opp_events, -0.5, "#f1c40f" if team == BOTH_LABEL else "#95a5a6", label_b)
 
     fig.update_layout(
         xaxis=dict(range=[0, 95], title="Minute",
@@ -881,12 +887,12 @@ def viz_big_chances(events, team, match):
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown(f"**{team} Big Chances**")
+        st.markdown(f"**{label_a} Big Chances**")
         for e in sorted(team_events, key=lambda x: x.game_time_ms):
             _jump_button(f"{e.game_time_display} - {e.player} (xG {e.xg:.2f})",
                          e, events, key=f"bc_team_{e.game_time_ms}")
     with col2:
-        st.markdown("**Opponent Big Chances**")
+        st.markdown(f"**{label_b} Big Chances**")
         for e in sorted(opp_events, key=lambda x: x.game_time_ms):
             _jump_button(f"{e.game_time_display} - {e.player} (xG {e.xg:.2f})",
                          e, events, key=f"bc_opp_{e.game_time_ms}")
@@ -897,7 +903,7 @@ def viz_big_chances(events, team, match):
 # ================================================================
 
 def viz_recoveries(events, team, match):
-    team_events = [e for e in events if e.team == team]
+    team_events = list(events) if team == BOTH_LABEL else [e for e in events if e.team == team]
     if not team_events:
         st.info(f"No ball recoveries by {team}.")
         return
@@ -978,7 +984,7 @@ def viz_recoveries(events, team, match):
 # ================================================================
 
 def viz_interceptions(events, team, match):
-    team_events = [e for e in events if e.team == team]
+    team_events = list(events) if team == BOTH_LABEL else [e for e in events if e.team == team]
     if not team_events:
         st.info(f"No interceptions by {team}.")
         return
@@ -1033,6 +1039,77 @@ def viz_interceptions(events, team, match):
 
 
 # ================================================================
+# VIZ: KEY PASSES (pitch with clickable arrows showing pass trajectory)
+# ================================================================
+
+def viz_key_passes(events, team, match):
+    if team == BOTH_LABEL:
+        team_events = list(events)
+        title_suffix = f"{match.home_team} vs {match.away_team}"
+    else:
+        team_events = [e for e in events if e.team == team]
+        title_suffix = team
+
+    if not team_events:
+        st.info(f"No key passes for {title_suffix}.")
+        return
+
+    st.markdown(f"**Key Passes ({title_suffix})** - click an arrow endpoint to watch")
+    st.caption("Arrows point from the pass origin to the shot-preparing delivery. Tap the endpoint dot.")
+
+    fig = _plotly_pitch(fig_height=500, xrange=(0, 52.5), yrange=(-34, 34))
+
+    # Colour by team so Both mode is readable
+    team_colors = {}
+    if team == BOTH_LABEL:
+        team_colors[match.home_team] = "#3498db"
+        team_colors[match.away_team] = "#e67e22"
+    else:
+        team_colors[team] = "#3498db"
+        # Any non-selected team events would be opponents (shouldn't happen after filter)
+
+    # Arrows from start -> end, plus clickable dot at the END (delivery point)
+    xs, ys, cds, hovers, colors = [], [], [], [], []
+    for i, e in enumerate(team_events):
+        sx, sy = _normalize_pos(e.start_x, e.start_y)
+        ex, ey = _normalize_pos(e.end_x, e.end_y)
+        color = team_colors.get(e.team, "#3498db")
+        fig.add_annotation(
+            x=ex, y=ey, ax=sx, ay=sy,
+            xref="x", yref="y", axref="x", ayref="y",
+            arrowhead=3, arrowsize=1.3, arrowwidth=2.2,
+            arrowcolor=color, showarrow=True, text="", opacity=0.85,
+        )
+        xs.append(ex); ys.append(ey); cds.append(i); colors.append(color)
+        hovers.append(
+            f"{e.game_time_display} - {e.team}<br>{e.player} → {e.receiver or '?'}<br>{e.sub_type} ({e.result})"
+        )
+
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="markers",
+        marker=dict(size=14, color=colors, line=dict(color="white", width=2)),
+        customdata=cds, hovertext=hovers, hoverinfo="text",
+        name="Key Pass",
+    ))
+    fig.update_layout(showlegend=False)
+
+    result = st.plotly_chart(fig, use_container_width=True, key="kp_map",
+                             on_select="rerun", selection_mode="points")
+    idx_map = {i: e for i, e in enumerate(team_events)}
+    _handle_plotly_click(result, "kp_map", idx_map, events)
+
+    # List breakdown by passer
+    st.markdown("---")
+    passer_counts = Counter(e.player for e in team_events)
+    st.markdown("**Passers**")
+    for player, cnt in passer_counts.most_common():
+        with st.expander(f"{player} ({cnt})"):
+            for e in [x for x in team_events if x.player == player]:
+                label = f"{e.game_time_display} - {e.team} → {e.receiver or '?'}"
+                _jump_button(label, e, events, key=f"kp_{e.game_time_ms}_{e.player}")
+
+
+# ================================================================
 # VIZ MAP
 # ================================================================
 
@@ -1041,6 +1118,7 @@ VIZ_MAP = {
     "goal_kick": viz_goal_kicks,
     "free_kick": viz_free_kicks,
     "cross": viz_crosses,
+    "key_pass": viz_key_passes,
     "goal": viz_goals,
     "shot_on_target": lambda e, t, m: viz_shots(e, t, m, "Shots on Target"),
     "shot": lambda e, t, m: viz_shots(e, t, m, "All Shots"),
@@ -1056,6 +1134,28 @@ VIZ_MAP = {
 
 def main():
     st.set_page_config(page_title="FCDB Match Tracker", layout="wide")
+
+    # Blue sidebar styling
+    st.markdown("""
+    <style>
+    [data-testid="stSidebar"] {
+        background-color: #1e3a8a;
+    }
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] .stRadio label,
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+        color: white !important;
+    }
+    [data-testid="stSidebar"] hr {
+        border-color: rgba(255, 255, 255, 0.3) !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     st.title("FCDB Match Tracker")
 
     matches = discover_matches(DATA_DIR)
@@ -1066,7 +1166,6 @@ def main():
     # --- CRITICAL: Consume pending_event_idx BEFORE any widgets render ---
     if "pending_event_idx" in st.session_state:
         pending = st.session_state.pop("pending_event_idx")
-        # Delete the old widget state so Streamlit reinitializes with new index
         st.session_state.pop("event_selector", None)
         st.session_state["selected_event_idx"] = pending
         st.session_state["__initial_event_idx"] = pending
@@ -1090,9 +1189,15 @@ def main():
         st.divider()
         st.header("Team")
         teams = [t for t in [match.home_team, match.away_team] if t]
-        selected_team = st.radio("Show analysis for", teams, horizontal=True)
+        team_options = teams + [BOTH_LABEL]
+        selected_team = st.radio("Show analysis for", team_options, horizontal=True)
 
-    events = get_events_by_type(match, event_type)
+    all_events = get_events_by_type(match, event_type)
+    # Filter the event dropdown by team selection; "Both" keeps everything.
+    if selected_team == BOTH_LABEL:
+        events = all_events
+    else:
+        events = [e for e in all_events if e.team == selected_team]
 
     # Detect event_type/team/match changes and reset event_selector widget state
     current_ctx = (selected_match_idx, event_type, selected_team)
@@ -1115,7 +1220,10 @@ def main():
 
     # --- Main area ---
     st.subheader(f"{event_type_label} - {match.home_team} vs {match.away_team}")
-    st.caption(f"{len(events)} events ({len([e for e in events if e.team == selected_team])} by {selected_team})")
+    if selected_team == BOTH_LABEL:
+        st.caption(f"{len(events)} events (both teams)")
+    else:
+        st.caption(f"{len(events)} events by {selected_team}")
 
     col_video, col_viz = st.columns([1, 1])
 

@@ -100,6 +100,55 @@ def _classify_shot(event: dict) -> list[str]:
 # PARSING
 # ================================================================
 
+def _find_key_pass_keys(raw_events: list[dict]) -> set[tuple[int, int]]:
+    """Return set of (sequenceId, startTimeMs) for passes/crosses that preceded a shot.
+
+    A key pass is the most recent PASS or CROSS by the same team in the same
+    sequence as a SHOT, walked backwards from the shot.
+    """
+    sorted_events = sorted(raw_events, key=lambda e: e.get("startTimeMs", 0))
+    keys = set()
+    for i, ev in enumerate(sorted_events):
+        if ev.get("baseTypeName") != "SHOT":
+            continue
+        seq_id = ev.get("sequenceId", -1)
+        if seq_id < 0:
+            continue
+        team = ev.get("teamName", "")
+        for j in range(i - 1, -1, -1):
+            prev = sorted_events[j]
+            if prev.get("sequenceId", -1) != seq_id:
+                break  # sequence ended
+            if prev.get("teamName", "") != team:
+                continue
+            if prev.get("baseTypeName") in ("PASS", "CROSS"):
+                keys.add((seq_id, prev.get("startTimeMs", 0)))
+                break
+    return keys
+
+
+def _build_event_from_raw(ev: dict, event_type: str) -> Event:
+    metrics = ev.get("metrics", {})
+    return Event(
+        event_type=event_type,
+        sub_type=ev.get("subTypeName", ""),
+        team=ev.get("teamName", ""),
+        player=ev.get("playerName", ""),
+        game_time_ms=ev.get("startTimeMs", 0),
+        video_time_sec=0.0,
+        result=ev.get("resultName", ""),
+        receiver=ev.get("receiverName", ""),
+        start_x=ev.get("startPosXM", 0.0),
+        start_y=ev.get("startPosYM", 0.0),
+        end_x=ev.get("endPosXM", 0.0),
+        end_y=ev.get("endPosYM", 0.0),
+        xg=metrics.get("xG", 0.0),
+        body_part=ev.get("bodyPartName", ""),
+        sequence_id=ev.get("sequenceId", -1),
+        labels=ev.get("labels", []),
+    )
+
+
 def _load_json_events(json_path: Path) -> tuple[list[Event], dict]:
     """Parse all relevant events from a SciSports JSON events file."""
     with open(json_path, "r", encoding="utf-8") as f:
@@ -107,15 +156,19 @@ def _load_json_events(json_path: Path) -> tuple[list[Event], dict]:
 
     meta = data.get("metaData", {})
     events = []
+    raw_events = data.get("data", [])
 
     # Build corner sequence IDs for linking shots/clearances to corners
     corner_sequences = set()
-    for ev in data.get("data", []):
+    for ev in raw_events:
         if "CORNER" in ev.get("subTypeName", ""):
             if ev.get("sequenceId", -1) >= 0:
                 corner_sequences.add(ev["sequenceId"])
 
-    for ev in data.get("data", []):
+    # Detect key passes (pass/cross that preceded a shot)
+    key_pass_keys = _find_key_pass_keys(raw_events)
+
+    for ev in raw_events:
         base = ev.get("baseTypeName", "")
         sub = ev.get("subTypeName", "")
         key = (base, sub)
@@ -170,6 +223,14 @@ def _load_json_events(json_path: Path) -> tuple[list[Event], dict]:
                         labels=ev.get("labels", []),
                     )
                     events.append(extra)
+
+    # Add key-pass category events (passes/crosses that led to a shot)
+    for ev in raw_events:
+        if ev.get("baseTypeName") not in ("PASS", "CROSS"):
+            continue
+        sig = (ev.get("sequenceId", -1), ev.get("startTimeMs", 0))
+        if sig in key_pass_keys:
+            events.append(_build_event_from_raw(ev, "key_pass"))
 
     return events, {"meta": meta, "corner_sequences": corner_sequences, "raw": data}
 

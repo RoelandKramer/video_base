@@ -1,0 +1,20 @@
+# Large video files — served from R2 in deployment
+*.mp4
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Streamlit clip cache
+kkd_clip_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/

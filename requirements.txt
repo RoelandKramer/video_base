@@ -1,6 +1,8 @@
 streamlit
 matplotlib
-scikit-learn
-scipy
+plotly
+pillow
 numpy
 pandas
+scikit-learn
+scipy
