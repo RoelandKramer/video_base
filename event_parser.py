@@ -33,6 +33,18 @@ class Event:
     part_id: int = 1        # 1 = first half, 2 = second half
     jersey_number: int = 0
     receiver_jersey: int = 0
+    shot_type: str = ""           # SciSports shotTypeName: ON_TARGET/WIDE/BLOCKED
+    sequence_start: bool = False
+    sequence_end: bool = False
+    start_zone: str = ""          # SciSports descriptives.startZone (e.g. "3C")
+    end_zone: str = ""            # SciSports descriptives.endZone
+    start_third: int = 0          # 1=defensive, 2=middle, 3=attacking (SciSports)
+    end_third: int = 0
+    goal_progression: float = 0.0
+    forward_displacement: float = 0.0
+    xa: float = 0.0
+    player_id: int = 0
+    receiver_id: int = 0
 
     @property
     def game_time_display(self) -> str:
@@ -82,6 +94,12 @@ EVENT_MAP = {
     ("INTERCEPTION", "RECOVERY"): "recovery",
     # Interceptions
     ("INTERCEPTION", "INTERCEPTION"): "interception",
+    # Generic passes (needed for Build-up & Final Third views)
+    ("PASS", "PASS"): "pass",
+    ("PASS", "LAUNCH_PASS"): "pass",
+    # Carries (needed for penalty-box entries)
+    ("DRIBBLE", "CARRY"): "carry",
+    ("DRIBBLE", "TAKE_ON"): "carry",
 }
 
 
@@ -134,6 +152,7 @@ def _find_key_pass_keys(raw_events: list[dict]) -> set[tuple[int, int]]:
 
 def _build_event_from_raw(ev: dict, event_type: str, player_shirts: dict = None) -> Event:
     metrics = ev.get("metrics", {})
+    descr = ev.get("descriptives", {})
     player_shirts = player_shirts or {}
     player = ev.get("playerName", "")
     receiver = ev.get("receiverName", "")
@@ -157,6 +176,18 @@ def _build_event_from_raw(ev: dict, event_type: str, player_shirts: dict = None)
         part_id=ev.get("partId", 1) if ev.get("partId", 1) in (1, 2) else 1,
         jersey_number=player_shirts.get(player, 0),
         receiver_jersey=player_shirts.get(receiver, 0),
+        shot_type=ev.get("shotTypeName", ""),
+        sequence_start=bool(ev.get("sequenceStart", False)),
+        sequence_end=bool(ev.get("sequenceEnd", False)),
+        start_zone=descr.get("startZone", "") or "",
+        end_zone=descr.get("endZone", "") or "",
+        start_third=descr.get("startThird", 0) or 0,
+        end_third=descr.get("endThird", 0) or 0,
+        goal_progression=metrics.get("goalProgression", 0.0) or 0.0,
+        forward_displacement=metrics.get("forwardDisplacement", 0.0) or 0.0,
+        xa=metrics.get("xA", 0.0) or 0.0,
+        player_id=ev.get("playerId", 0) or 0,
+        receiver_id=ev.get("receiverId", 0) or 0,
     )
 
 
@@ -269,6 +300,45 @@ def _load_video_config(data_dir: Path) -> dict:
     if not videos_file.exists():
         return {}
     return json.loads(videos_file.read_text(encoding="utf-8"))
+
+
+def load_positions(json_path: Path) -> list:
+    """Load SciSports tracking data (positions.json) — list of frames.
+    Each frame: {"t": ms, "h": [{x,y,p,s}], "a": [...], "b": {x,y,z}}.
+    """
+    if not json_path.exists():
+        return []
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    return data.get("data", [])
+
+
+def avg_positions_in_window(frames: list, start_ms: int, end_ms: int) -> dict:
+    """Compute mean (x, y) per player ID in the time window.
+    Returns {'h': {player_id: (x, y, shirt)}, 'a': {...}}."""
+    buckets = {"h": {}, "a": {}}  # side -> pid -> [xs, ys, shirt]
+    for f in frames:
+        t = f.get("t", 0)
+        if t < start_ms:
+            continue
+        if t > end_ms:
+            break  # frames are sorted by t
+        for side in ("h", "a"):
+            for pl in f.get(side, []):
+                pid = pl.get("p")
+                if pid is None:
+                    continue
+                d = buckets[side].setdefault(pid, {"xs": [], "ys": [], "s": pl.get("s", 0)})
+                d["xs"].append(pl.get("x", 0))
+                d["ys"].append(pl.get("y", 0))
+    out = {"h": {}, "a": {}}
+    for side in ("h", "a"):
+        for pid, d in buckets[side].items():
+            if not d["xs"]:
+                continue
+            out[side][pid] = (sum(d["xs"])/len(d["xs"]),
+                              sum(d["ys"])/len(d["ys"]),
+                              d["s"])
+    return out
 
 
 def discover_matches(data_dir: Path) -> list[Match]:
