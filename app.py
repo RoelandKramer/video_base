@@ -556,10 +556,22 @@ def viz_free_kicks(events, team, match):
             hovertext=pass_hover, hoverinfo="text",
             name="FK Pass",
         ))
+    # Attacking-direction indicator: arrow across the top of the pitch
+    fig.add_annotation(
+        x=20, y=31, ax=-20, ay=31,
+        xref="x", yref="y", axref="x", ayref="y",
+        showarrow=True, arrowhead=3, arrowsize=1.5, arrowwidth=3,
+        arrowcolor="white", text="",
+    )
+    fig.add_annotation(
+        x=0, y=32.5, text="<b>ATTACKING DIRECTION →</b>",
+        showarrow=False, font=dict(color="white", size=13),
+    )
     fig.update_layout(showlegend=True, legend=dict(bgcolor="rgba(0,0,0,0.3)",
                                                     font=dict(color="white")))
     title_tag = "Both" if team == BOTH_LABEL else team
     st.markdown(f"**Free Kick Threat Map ({title_tag})** - stars=shots, arrows=crosses")
+    st.caption("All free kicks shown as if both teams attack left → right.")
     result = st.plotly_chart(fig, use_container_width=True, key="fk_map",
                              on_select="rerun", selection_mode="points")
     idx_map = {i: e for i, e in enumerate(team_events)}
@@ -1356,7 +1368,7 @@ def viz_key_passes(events, team, match):
     st.markdown(f"**Key Passes ({title_suffix})** - click an arrow endpoint to watch")
     st.caption("Arrows point from the pass origin to the shot-preparing delivery. Tap the endpoint dot.")
 
-    fig = _plotly_pitch(fig_height=520, xrange=(-5, 55), yrange=(-34, 34), outline=False)
+    fig = _plotly_pitch(fig_height=520)
 
     # Colour by team so Both mode is readable
     team_colors = {}
