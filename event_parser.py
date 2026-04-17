@@ -30,6 +30,9 @@ class Event:
     body_part: str = ""
     sequence_id: int = -1
     labels: list = field(default_factory=list)
+    part_id: int = 1        # 1 = first half, 2 = second half
+    jersey_number: int = 0
+    receiver_jersey: int = 0
 
     @property
     def game_time_display(self) -> str:
@@ -50,6 +53,8 @@ class Match:
     cameras: dict[str, str]
     events: list[Event] = field(default_factory=list)
     video_offset: float = 0.0  # seconds to add to game-clock for video seeking
+    players: dict = field(default_factory=dict)   # playerName -> {'shirt': int, 'team': str}
+    attack_dir: dict = field(default_factory=dict)  # (team, part_id) -> +1 (right) / -1 (left)
 
 
 # ================================================================
@@ -127,17 +132,20 @@ def _find_key_pass_keys(raw_events: list[dict]) -> set[tuple[int, int]]:
     return keys
 
 
-def _build_event_from_raw(ev: dict, event_type: str) -> Event:
+def _build_event_from_raw(ev: dict, event_type: str, player_shirts: dict = None) -> Event:
     metrics = ev.get("metrics", {})
+    player_shirts = player_shirts or {}
+    player = ev.get("playerName", "")
+    receiver = ev.get("receiverName", "")
     return Event(
         event_type=event_type,
         sub_type=ev.get("subTypeName", ""),
         team=ev.get("teamName", ""),
-        player=ev.get("playerName", ""),
+        player=player,
         game_time_ms=ev.get("startTimeMs", 0),
         video_time_sec=0.0,
         result=ev.get("resultName", ""),
-        receiver=ev.get("receiverName", ""),
+        receiver=receiver,
         start_x=ev.get("startPosXM", 0.0),
         start_y=ev.get("startPosYM", 0.0),
         end_x=ev.get("endPosXM", 0.0),
@@ -146,6 +154,9 @@ def _build_event_from_raw(ev: dict, event_type: str) -> Event:
         body_part=ev.get("bodyPartName", ""),
         sequence_id=ev.get("sequenceId", -1),
         labels=ev.get("labels", []),
+        part_id=ev.get("partId", 1) if ev.get("partId", 1) in (1, 2) else 1,
+        jersey_number=player_shirts.get(player, 0),
+        receiver_jersey=player_shirts.get(receiver, 0),
     )
 
 
@@ -157,6 +168,19 @@ def _load_json_events(json_path: Path) -> tuple[list[Event], dict]:
     meta = data.get("metaData", {})
     events = []
     raw_events = data.get("data", [])
+
+    # Player -> shirt number lookup
+    players_info = {}
+    player_shirts = {}
+    for p in data.get("players", []):
+        name = p.get("playerName", "")
+        if not name:
+            continue
+        players_info[name] = {
+            "shirt": p.get("shirtNumber", 0) or 0,
+            "team": p.get("teamName", ""),
+        }
+        player_shirts[name] = p.get("shirtNumber", 0) or 0
 
     # Build corner sequence IDs for linking shots/clearances to corners
     corner_sequences = set()
@@ -177,52 +201,13 @@ def _load_json_events(json_path: Path) -> tuple[list[Event], dict]:
             continue
 
         event_type = EVENT_MAP[key]
-        metrics = ev.get("metrics", {})
-
-        event = Event(
-            event_type=event_type,
-            sub_type=sub,
-            team=ev.get("teamName", ""),
-            player=ev.get("playerName", ""),
-            game_time_ms=ev.get("startTimeMs", 0),
-            video_time_sec=0.0,  # filled later
-            result=ev.get("resultName", ""),
-            receiver=ev.get("receiverName", ""),
-            start_x=ev.get("startPosXM", 0.0),
-            start_y=ev.get("startPosYM", 0.0),
-            end_x=ev.get("endPosXM", 0.0),
-            end_y=ev.get("endPosYM", 0.0),
-            xg=metrics.get("xG", 0.0),
-            body_part=ev.get("bodyPartName", ""),
-            sequence_id=ev.get("sequenceId", -1),
-            labels=ev.get("labels", []),
-        )
-        events.append(event)
+        events.append(_build_event_from_raw(ev, event_type, player_shirts))
 
         # For shots, also add to goal/on_target/big_chance categories
         if base == "SHOT":
-            extra_cats = _classify_shot(ev)
-            for cat in extra_cats:
+            for cat in _classify_shot(ev):
                 if cat != "shot":
-                    extra = Event(
-                        event_type=cat,
-                        sub_type=sub,
-                        team=ev.get("teamName", ""),
-                        player=ev.get("playerName", ""),
-                        game_time_ms=ev.get("startTimeMs", 0),
-                        video_time_sec=0.0,
-                        result=ev.get("resultName", ""),
-                        receiver=ev.get("receiverName", ""),
-                        start_x=ev.get("startPosXM", 0.0),
-                        start_y=ev.get("startPosYM", 0.0),
-                        end_x=ev.get("endPosXM", 0.0),
-                        end_y=ev.get("endPosYM", 0.0),
-                        xg=metrics.get("xG", 0.0),
-                        body_part=ev.get("bodyPartName", ""),
-                        sequence_id=ev.get("sequenceId", -1),
-                        labels=ev.get("labels", []),
-                    )
-                    events.append(extra)
+                    events.append(_build_event_from_raw(ev, cat, player_shirts))
 
     # Add key-pass category events (passes/crosses that led to a shot)
     for ev in raw_events:
@@ -230,9 +215,43 @@ def _load_json_events(json_path: Path) -> tuple[list[Event], dict]:
             continue
         sig = (ev.get("sequenceId", -1), ev.get("startTimeMs", 0))
         if sig in key_pass_keys:
-            events.append(_build_event_from_raw(ev, "key_pass"))
+            events.append(_build_event_from_raw(ev, "key_pass", player_shirts))
 
-    return events, {"meta": meta, "corner_sequences": corner_sequences, "raw": data}
+    # Compute per-team, per-period attacking direction from SHOT start_x sign.
+    attack_dir = _compute_attack_directions(raw_events)
+
+    return events, {
+        "meta": meta,
+        "corner_sequences": corner_sequences,
+        "players": players_info,
+        "attack_dir": attack_dir,
+        "raw": data,
+    }
+
+
+def _compute_attack_directions(raw_events: list[dict]) -> dict:
+    """For each (team, part_id), determine attacking direction (+1=right, -1=left).
+
+    Uses mean sign of SHOT start_x — shots go toward opponent goal, so the sign
+    of the shot's x tells us which way that team is attacking.
+    """
+    buckets = {}  # (team, part_id) -> [signs]
+    for ev in raw_events:
+        if ev.get("baseTypeName") != "SHOT":
+            continue
+        team = ev.get("teamName", "")
+        part = ev.get("partId", 1)
+        if part not in (1, 2):
+            continue
+        x = ev.get("startPosXM", 0.0)
+        if x == 0:
+            continue
+        buckets.setdefault((team, part), []).append(1 if x > 0 else -1)
+    dirs = {}
+    for k, signs in buckets.items():
+        avg = sum(signs) / len(signs)
+        dirs[k] = 1 if avg >= 0 else -1
+    return dirs
 
 
 def _compute_video_times(events: list[Event], video_offset: float):
@@ -289,6 +308,8 @@ def discover_matches(data_dir: Path) -> list[Match]:
             cameras=cameras,
             events=events,
             video_offset=video_offset,
+            players=extra.get("players", {}),
+            attack_dir=extra.get("attack_dir", {}),
         ))
 
     return matches

@@ -67,7 +67,7 @@ def _jump_button(label, event, all_events, key):
 def _event_buttons(events_to_show, all_events, prefix):
     for i, e in enumerate(events_to_show):
         _jump_button(
-            f"{e.game_time_display} - {e.player}",
+            f"{e.game_time_display} - {_pname(e)}",
             e, all_events, key=f"{prefix}_{i}",
         )
 
@@ -99,10 +99,32 @@ def _handle_plotly_click(result, key, index_to_event, all_events):
 
 
 def _normalize_pos(x, y):
-    """Flip so attacks always go to x > 0 (right side)."""
-    if x < 0:
-        return -x, -y
+    """SciSports events are already per-team normalized (each team attacks to +x),
+    so positions are used as-is. Kept as a helper for clarity/future flexibility."""
     return x, y
+
+
+def _pname(event) -> str:
+    """Format player name with jersey number: '7. Daniel de Ridder'."""
+    if event.jersey_number and event.jersey_number > 0:
+        return f"{event.jersey_number}. {event.player}"
+    return event.player
+
+
+def _rname(event) -> str:
+    """Format receiver name with jersey number, empty if no receiver."""
+    if not event.receiver or event.receiver == "NOT_APPLICABLE":
+        return ""
+    if event.receiver_jersey and event.receiver_jersey > 0:
+        return f"{event.receiver_jersey}. {event.receiver}"
+    return event.receiver
+
+
+def _match_player_label(match, player_name: str) -> str:
+    info = match.players.get(player_name) if hasattr(match, "players") else None
+    if info and info.get("shirt"):
+        return f"{info['shirt']}. {player_name}"
+    return player_name
 
 
 # ================================================================
@@ -129,39 +151,44 @@ def _sci_to_pixel(x_m, y_m):
 # FULL-PITCH PLOTLY HELPERS
 # ================================================================
 
-def _plotly_pitch(fig_height=420, xrange=(-PITCH_X, PITCH_X), yrange=(-PITCH_Y, PITCH_Y)):
-    """Build an empty plotly full pitch."""
+def _plotly_pitch(fig_height=420, xrange=(-PITCH_X, PITCH_X), yrange=(-PITCH_Y, PITCH_Y),
+                  outline=True):
+    """Build an empty plotly full pitch. With outline=False, the outer rect,
+    halfway line and centre circle are not drawn (used for zoomed views)."""
     fig = go.Figure()
     green = "#2d7a3a"
     line = "#ffffff"
-    # Pitch background
+    # Pitch background (fill only when outline is hidden, to avoid a visible frame)
+    outer_line = dict(color=line, width=2) if outline else dict(color=green, width=0)
     fig.add_shape(type="rect", x0=xrange[0], y0=yrange[0], x1=xrange[1], y1=yrange[1],
-                  fillcolor=green, line=dict(color=line, width=2), layer="below")
-    # Halfway line
-    fig.add_shape(type="line", x0=0, y0=yrange[0], x1=0, y1=yrange[1],
-                  line=dict(color=line, width=2))
-    # Centre circle
-    fig.add_shape(type="circle", x0=-9.15, y0=-9.15, x1=9.15, y1=9.15,
-                  line=dict(color=line, width=2))
-    # Boxes
+                  fillcolor=green, line=outer_line, layer="below")
+    if outline:
+        # Halfway line
+        fig.add_shape(type="line", x0=0, y0=yrange[0], x1=0, y1=yrange[1],
+                      line=dict(color=line, width=2))
+        # Centre circle
+        fig.add_shape(type="circle", x0=-9.15, y0=-9.15, x1=9.15, y1=9.15,
+                      line=dict(color=line, width=2))
+    # Boxes + penalty spots (always drawn; they sit at the goal ends)
     for side in (-1, 1):
-        # 18-yd box
         fig.add_shape(type="rect",
                       x0=side*52.5, y0=-20.16, x1=side*(52.5-16.5), y1=20.16,
                       line=dict(color=line, width=2))
-        # 6-yd box
         fig.add_shape(type="rect",
                       x0=side*52.5, y0=-9.16, x1=side*(52.5-5.5), y1=9.16,
                       line=dict(color=line, width=2))
-        # Penalty spot
         fig.add_shape(type="circle",
                       x0=side*41.5-0.3, y0=-0.3, x1=side*41.5+0.3, y1=0.3,
                       line=dict(color=line), fillcolor=line)
+        # Goal line segment (tiny marker by the goal)
+        fig.add_shape(type="line",
+                      x0=side*52.5, y0=-3.66, x1=side*52.5, y1=3.66,
+                      line=dict(color=line, width=4))
     fig.update_layout(
         xaxis=dict(range=list(xrange), visible=False),
         yaxis=dict(range=list(yrange), visible=False, scaleanchor="x"),
         plot_bgcolor=green, paper_bgcolor=green,
-        margin=dict(l=0, r=0, t=20, b=0),
+        margin=dict(l=0, r=0, t=0, b=0),
         height=fig_height,
         showlegend=False,
     )
@@ -387,7 +414,8 @@ def viz_corners(events, team, match):
         shooter_counts = Counter(s.player for s in shots_from_corners)
         for player, count in shooter_counts.most_common():
             clips = [s for s in shots_from_corners if s.player == player]
-            with st.expander(f"{player} - {count} shot(s) from corners"):
+            label = _match_player_label(match, player)
+            with st.expander(f"{label} - {count} shot(s) from corners"):
                 _event_buttons(clips, events, f"corner_shooter_{player}")
     else:
         st.caption("No shots from corners.")
@@ -463,7 +491,7 @@ def viz_goal_kicks(events, team, match):
         counts = [c for _, c in recvs.most_common()]
         ax.barh(range(len(players)), counts, color="#3498db")
         ax.set_yticks(range(len(players)))
-        ax.set_yticklabels([p.split()[-1] for p in players], fontsize=9)
+        ax.set_yticklabels([_match_player_label(match, p) for p in players], fontsize=9)
         ax.set_xlabel("Times Received")
         ax.invert_yaxis()
         plt.tight_layout()
@@ -490,7 +518,7 @@ def viz_free_kicks(events, team, match):
 
     for i, e in enumerate(team_events):
         x, y = _normalize_pos(e.start_x, e.start_y)
-        hover = f"{e.game_time_display} - {e.player}<br>{e.sub_type} ({e.result})"
+        hover = f"{e.game_time_display} - {_pname(e)}<br>{e.sub_type} ({e.result})"
         if e.sub_type == "SHOT_FREE_KICK":
             shot_xs.append(x); shot_ys.append(y); shot_cd.append(i); shot_hover.append(hover)
         elif "CROSS" in e.sub_type:
@@ -530,33 +558,27 @@ def viz_free_kicks(events, team, match):
         ))
     fig.update_layout(showlegend=True, legend=dict(bgcolor="rgba(0,0,0,0.3)",
                                                     font=dict(color="white")))
-    st.markdown(f"**Free Kick Threat Map ({team})** - stars=shots, arrows=crosses")
+    title_tag = "Both" if team == BOTH_LABEL else team
+    st.markdown(f"**Free Kick Threat Map ({title_tag})** - stars=shots, arrows=crosses")
     result = st.plotly_chart(fig, use_container_width=True, key="fk_map",
                              on_select="rerun", selection_mode="points")
     idx_map = {i: e for i, e in enumerate(team_events)}
     _handle_plotly_click(result, "fk_map", idx_map, events)
 
-    # Breakdown
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Takers**")
-        for player, cnt in Counter(e.player for e in team_events).most_common():
-            with st.expander(f"{player} ({cnt})"):
-                _event_buttons([e for e in team_events if e.player == player],
-                                events, f"fk_taker_{player}")
-    with col2:
-        st.markdown("**Outcomes**")
-        outcomes = Counter(e.sub_type for e in team_events)
-        fig2, ax = plt.subplots(figsize=(4.5, 3))
-        labels = list(outcomes.keys())
-        values = list(outcomes.values())
-        colors = ["#f39c12", "#3498db", "#95a5a6", "#e74c3c"][:len(labels)]
-        ax.pie(values, labels=[l.replace("_", " ").title() for l in labels],
-               colors=colors, autopct="%1.0f%%", startangle=90,
-               textprops={"fontsize": 9})
-        plt.tight_layout()
-        st.pyplot(fig2)
-        plt.close(fig2)
+    # Takers
+    st.markdown("---")
+    st.markdown("**Takers**")
+    for player, cnt in Counter(e.player for e in team_events).most_common():
+        shirt = match.players.get(player, {}).get("shirt", 0) if match.players else 0
+        name_label = f"{shirt}. {player}" if shirt else player
+        with st.expander(f"{name_label} ({cnt})"):
+            _event_buttons([e for e in team_events if e.player == player],
+                            events, f"fk_taker_{player}")
+
+    # Top 5 biggest chances from free kicks (xG for direct shots, xA for shot-creating passes)
+    st.markdown("---")
+    st.markdown("**Top 5 Biggest Chances From Free Kicks**")
+    _render_fk_top_chances(team_events, team, match, events, key_prefix="fk_xga")
 
 
 # ================================================================
@@ -576,7 +598,7 @@ def viz_crosses(events, team, match):
 
     for i, e in enumerate(team_events):
         x, y = _normalize_pos(e.start_x, e.start_y)
-        hover = f"{e.game_time_display} - {e.player}<br>{e.result}"
+        hover = f"{e.game_time_display} - {_pname(e)}<br>{e.result}"
         if e.result == "SUCCESSFUL":
             succ_x.append(x); succ_y.append(y); succ_cd.append(i); succ_hover.append(hover)
         else:
@@ -606,29 +628,163 @@ def viz_crosses(events, team, match):
     fig.update_layout(showlegend=True, legend=dict(bgcolor="rgba(0,0,0,0.3)",
                                                     font=dict(color="white")))
 
-    st.markdown(f"**Cross Origins ({team})** - click a dot to watch")
+    title_tag = "Both" if team == BOTH_LABEL else team
+    st.markdown(f"**Cross Origins ({title_tag})** - click a dot to watch")
     result = st.plotly_chart(fig, use_container_width=True, key="cross_map",
                              on_select="rerun", selection_mode="points")
     idx_map = {i: e for i, e in enumerate(team_events)}
     _handle_plotly_click(result, "cross_map", idx_map, events)
 
-    # Wing breakdown
-    left_wing = [(i, e) for i, e in enumerate(team_events)
-                 if _normalize_pos(e.start_x, e.start_y)[1] > 10]
-    right_wing = [(i, e) for i, e in enumerate(team_events)
-                  if _normalize_pos(e.start_x, e.start_y)[1] < -10]
+    # ---- Top-5 biggest chances created from crosses (per team) ----
     st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown(f"**Left Wing Crosses ({len(left_wing)})**")
-        for _, e in left_wing:
-            _jump_button(f"{e.game_time_display} - {e.player} ({e.result})",
-                         e, events, key=f"cross_L_{e.game_time_ms}")
-    with col2:
-        st.markdown(f"**Right Wing Crosses ({len(right_wing)})**")
-        for _, e in right_wing:
-            _jump_button(f"{e.game_time_display} - {e.player} ({e.result})",
-                         e, events, key=f"cross_R_{e.game_time_ms}")
+    st.markdown("**Top 5 Biggest Chances From Crosses (xA)**")
+    _render_top_chances_from_passes(team_events, team, match, events,
+                                     key_prefix="cross_xa", score_fn=_xa_score,
+                                     score_label="xA")
+
+
+def _xa_score(pass_event, shot):
+    """xA = xG of the shot created by this pass/cross."""
+    return shot.xg
+
+
+def _xga_score(pass_event, shot):
+    """Combined xG+xA: weighs free-kick shots (own xG) and shot-creating passes equally."""
+    return shot.xg
+
+
+def _find_next_shot_in_sequence(pass_event, match):
+    """Return the next SHOT in the same sequence by the same team after this pass/cross."""
+    if pass_event.sequence_id < 0:
+        return None
+    cand = [e for e in match.events
+            if e.event_type == "shot"
+            and e.sequence_id == pass_event.sequence_id
+            and e.team == pass_event.team
+            and e.game_time_ms >= pass_event.game_time_ms]
+    cand.sort(key=lambda x: x.game_time_ms)
+    return cand[0] if cand else None
+
+
+def _render_fk_top_chances(fk_events, team, match, nav_events, key_prefix):
+    """Top 5 free kicks ranked by xG (own shot) or xA (assist to a shot).
+    Bars are labelled with the metric: e.g. "7. Gudelj 0.40 xG" or "10. Steijn 0.32 xA"."""
+    if team == BOTH_LABEL:
+        groups = [(match.home_team, [e for e in fk_events if e.team == match.home_team]),
+                  (match.away_team, [e for e in fk_events if e.team == match.away_team])]
+    else:
+        groups = [(team, [e for e in fk_events if e.team == team])]
+
+    for team_name, evts in groups:
+        rows = []
+        for e in evts:
+            # Direct shot from a free kick
+            if e.sub_type == "SHOT_FREE_KICK" and e.xg > 0:
+                rows.append((e, e.xg, "xG", None))
+                continue
+            # Free kick that created a shot (xA = shot's xG)
+            shot = _find_next_shot_in_sequence(e, match)
+            if shot is not None and shot.xg > 0:
+                rows.append((e, shot.xg, "xA", shot))
+        rows.sort(key=lambda r: -r[1])
+        top = rows[:5]
+
+        st.markdown(f"*{team_name}*")
+        if not top:
+            st.caption("No shot-creating free kicks.")
+            continue
+
+        labels, values, colors, cds = [], [], [], []
+        for i, (e, score, metric, shot) in enumerate(top):
+            if metric == "xA":
+                tgt = _rname(e) or (_pname(shot) if shot else "?")
+                label = f"{_pname(e)} → {tgt} ({score:.2f} {metric})"
+                colors.append("#3498db")
+            else:
+                label = f"{_pname(e)} ({score:.2f} {metric})"
+                colors.append("#f39c12")
+            labels.append(label)
+            values.append(score)
+            cds.append(i)
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=values, y=labels, orientation="h",
+            marker=dict(color=colors),
+            customdata=cds,
+            hovertemplate="<b>%{y}</b><br>Score: %{x:.3f}<extra></extra>",
+        ))
+        fig.update_layout(
+            height=240, margin=dict(l=10, r=10, t=10, b=30),
+            xaxis=dict(title="xG / xA"),
+            yaxis=dict(autorange="reversed"),
+            plot_bgcolor="white",
+            showlegend=False,
+        )
+        chart_key = f"{key_prefix}_{team_name}"
+        result = st.plotly_chart(fig, use_container_width=True, key=chart_key,
+                                 on_select="rerun", selection_mode="points")
+        idx_map = {i: top[i][0] for i in range(len(top))}
+        _handle_plotly_click(result, chart_key, idx_map, nav_events)
+
+
+def _render_top_chances_from_passes(pass_events, team, match, nav_events,
+                                     key_prefix, score_fn, score_label):
+    """Render a per-team horizontal bar chart of the top-5 chances created.
+    `pass_events` is the set of passes/crosses/free kicks to analyze.
+    Each bar is clickable via plotly and jumps to that pass's clip."""
+    # Group by team
+    if team == BOTH_LABEL:
+        groups = [(match.home_team, [e for e in pass_events if e.team == match.home_team]),
+                  (match.away_team, [e for e in pass_events if e.team == match.away_team])]
+    else:
+        groups = [(team, [e for e in pass_events if e.team == team])]
+
+    for team_name, evts in groups:
+        rows = []
+        for e in evts:
+            shot = _find_next_shot_in_sequence(e, match)
+            if shot is None or shot.xg <= 0:
+                continue
+            score = score_fn(e, shot)
+            rows.append((e, shot, score))
+        rows.sort(key=lambda r: -r[2])
+        top = rows[:5]
+
+        st.markdown(f"*{team_name}*")
+        if not top:
+            st.caption(f"No shot-creating {key_prefix.split('_')[0]}s.")
+            continue
+
+        labels = []
+        values = []
+        cds = []
+        for i, (p, shot, score) in enumerate(top):
+            passer = _pname(p)
+            target = _rname(p) or _pname(shot)
+            labels.append(f"{passer} → {target} ({p.game_time_display})")
+            values.append(score)
+            cds.append(i)
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=values, y=labels, orientation="h",
+            marker=dict(color="#e67e22"),
+            customdata=cds,
+            hovertemplate=f"<b>%{{y}}</b><br>{score_label}: %{{x:.3f}}<extra></extra>",
+        ))
+        fig.update_layout(
+            height=240, margin=dict(l=10, r=10, t=10, b=30),
+            xaxis=dict(title=score_label),
+            yaxis=dict(autorange="reversed"),
+            plot_bgcolor="white",
+            showlegend=False,
+        )
+        chart_key = f"{key_prefix}_{team_name}"
+        result = st.plotly_chart(fig, use_container_width=True, key=chart_key,
+                                 on_select="rerun", selection_mode="points")
+        idx_map = {i: top[i][0] for i in range(len(top))}
+        _handle_plotly_click(result, chart_key, idx_map, nav_events)
 
 
 # ================================================================
@@ -650,8 +806,8 @@ def viz_goals(events, team, match):
 
     st.markdown(f"**{title}**")
 
-    # Zoomed attacking-third pitch (x ∈ [15, 52.5])
-    fig = _plotly_pitch(fig_height=500, xrange=(15, 52.5), yrange=(-34, 34))
+    # Zoomed attacking-third pitch (box centered vertically, no outer frame)
+    fig = _plotly_pitch(fig_height=520, xrange=(18, 55), yrange=(-30, 30), outline=False)
 
     def find_assist(goal):
         cand = [x for x in match.events
@@ -669,7 +825,7 @@ def viz_goals(events, team, match):
         for i, e in enumerate(evts):
             x, y = _normalize_pos(e.start_x, e.start_y)
             xs.append(x); ys.append(y); cds.append(i)
-            hovers.append(f"{e.game_time_display} - {e.player}<br>xG: {e.xg:.2f}")
+            hovers.append(f"{e.game_time_display} - {_pname(e)}<br>xG: {e.xg:.2f}")
             assist = find_assist(e)
             if assist:
                 ax_, ay_ = _normalize_pos(assist.start_x, assist.start_y)
@@ -715,9 +871,9 @@ def viz_goals(events, team, match):
     st.markdown("**Goal Clips**")
     for e in group_a + group_b:
         assist = find_assist(e)
-        label = f"{e.game_time_display} - {e.team} - {e.player} (xG: {e.xg:.2f})"
+        label = f"{e.game_time_display} - {e.team} - {_pname(e)} (xG: {e.xg:.2f})"
         if assist:
-            label += f"  [assist: {assist.player}]"
+            label += f"  [assist: {_pname(assist)}]"
         _jump_button(label, e, events, key=f"goal_{e.game_time_ms}_{e.team}")
 
 
@@ -753,8 +909,8 @@ def viz_shots(events, team, match, title="Shots"):
     st.markdown(f"**{title} Map - {label_a} ({len(a_f)}) vs {label_b} ({len(b_f)})**")
     st.caption("Click a shot to watch the clip")
 
-    # Zoomed attacking-third pitch
-    fig = _plotly_pitch(fig_height=500, xrange=(15, 52.5), yrange=(-34, 34))
+    # Zoomed attacking-third pitch (box centered vertically, no outer frame)
+    fig = _plotly_pitch(fig_height=520, xrange=(18, 55), yrange=(-30, 30), outline=False)
 
     trace_groups = []
 
@@ -767,7 +923,7 @@ def viz_shots(events, team, match, title="Shots"):
             cds.append(i)
             sym = "star" if e.result == "SUCCESSFUL" else "circle"
             symbols.append(sym)
-            hovers.append(f"{e.game_time_display} - {e.player}<br>xG: {e.xg:.3f}<br>{e.sub_type} ({e.result})")
+            hovers.append(f"{e.game_time_display} - {_pname(e)}<br>xG: {e.xg:.3f}<br>{e.sub_type} ({e.result})")
         if xs:
             fig.add_trace(go.Scatter(
                 x=xs, y=ys, mode="markers",
@@ -824,6 +980,80 @@ def viz_big_chances(events, team, match):
         opp_events = [e for e in events if e.team != team]
         label_a, label_b = team, "Opponent"
 
+    # ---- Cumulative xG chart (all shots, not just big chances) ----
+    st.markdown(f"**Cumulative xG ({label_a} vs {label_b})**")
+    all_shots = [e for e in match.events if e.event_type == "shot"]
+    if team == BOTH_LABEL:
+        shots_a = [s for s in all_shots if s.team == match.home_team]
+        shots_b = [s for s in all_shots if s.team == match.away_team]
+    else:
+        shots_a = [s for s in all_shots if s.team == team]
+        shots_b = [s for s in all_shots if s.team != team]
+
+    def _xg_steps(shots):
+        shots = sorted(shots, key=lambda s: s.game_time_ms)
+        xs, ys, hovers, cds = [0], [0.0], ["0' - 0.00 xG"], [-1]
+        total = 0.0
+        for i, s in enumerate(shots):
+            minute = s.game_time_ms / 60000
+            # Step: first carry previous total at this minute, then add xG
+            xs.append(minute); ys.append(total); hovers.append(""); cds.append(-1)
+            total += s.xg
+            xs.append(minute); ys.append(total)
+            hovers.append(f"{s.game_time_display} - {_pname(s)} (+{s.xg:.2f} xG → {total:.2f})")
+            cds.append(i)
+        # Extend to 95' for readability
+        xs.append(95); ys.append(total); hovers.append(""); cds.append(-1)
+        return xs, ys, hovers, cds, shots
+
+    xs_a, ys_a, hov_a, cd_a, shots_a = _xg_steps(shots_a)
+    xs_b, ys_b, hov_b, cd_b, shots_b = _xg_steps(shots_b)
+
+    xg_fig = go.Figure()
+    xg_fig.add_trace(go.Scatter(
+        x=xs_a, y=ys_a, mode="lines+markers", name=f"{label_a} ({ys_a[-1]:.2f})",
+        line=dict(color="#e74c3c", width=3, shape="hv"),
+        marker=dict(size=[10 if c >= 0 else 0 for c in cd_a], color="#e74c3c"),
+        customdata=cd_a, hovertext=hov_a, hoverinfo="text",
+    ))
+    xg_fig.add_trace(go.Scatter(
+        x=xs_b, y=ys_b, mode="lines+markers",
+        name=f"{label_b} ({ys_b[-1]:.2f})",
+        line=dict(color="#f1c40f" if team == BOTH_LABEL else "#7f8c8d", width=3, shape="hv"),
+        marker=dict(size=[10 if c >= 0 else 0 for c in cd_b],
+                    color="#f1c40f" if team == BOTH_LABEL else "#7f8c8d"),
+        customdata=cd_b, hovertext=hov_b, hoverinfo="text",
+    ))
+    xg_fig.add_shape(type="line", x0=45, x1=45, y0=0,
+                     y1=max(ys_a[-1], ys_b[-1]) + 0.3,
+                     line=dict(color="#7f8c8d", width=1, dash="dash"))
+    xg_fig.update_layout(
+        xaxis=dict(range=[0, 95], title="Minute",
+                   tickmode="array", tickvals=[0, 15, 30, 45, 60, 75, 90]),
+        yaxis=dict(title="Cumulative xG"),
+        height=300,
+        margin=dict(l=40, r=10, t=10, b=40),
+        plot_bgcolor="white",
+        showlegend=True,
+    )
+    xg_result = st.plotly_chart(xg_fig, use_container_width=True, key="xg_cumulative",
+                                 on_select="rerun", selection_mode="points")
+    if xg_result:
+        sel = xg_result.get("selection") if isinstance(xg_result, dict) else None
+        if sel and sel.get("points"):
+            pt = sel["points"][0]
+            cd = pt.get("customdata")
+            if isinstance(cd, list):
+                cd = cd[0]
+            trace_idx = pt.get("curve_number", 0)
+            sig = f"xg_{trace_idx}_{cd}"
+            if cd is not None and cd >= 0 and st.session_state.get("__consumed_xg_cum") != sig:
+                st.session_state["__consumed_xg_cum"] = sig
+                src = shots_a if trace_idx == 0 else shots_b
+                if cd < len(src):
+                    _jump_to_event(src[cd], events)
+
+    st.markdown("---")
     st.markdown(f"**Big Chances Timeline ({label_a} vs {label_b})**")
 
     fig = go.Figure()
@@ -846,7 +1076,7 @@ def viz_big_chances(events, team, match):
             ys.append(side_y)
             cds.append(i)
             sizes.append(max(14, e.xg * 80))
-            hovers.append(f"{e.game_time_display} - {e.player}<br>xG: {e.xg:.3f}")
+            hovers.append(f"{e.game_time_display} - {_pname(e)}<br>xG: {e.xg:.3f}")
         if xs:
             fig.add_trace(go.Scatter(
                 x=xs, y=ys, mode="markers",
@@ -889,12 +1119,12 @@ def viz_big_chances(events, team, match):
     with col1:
         st.markdown(f"**{label_a} Big Chances**")
         for e in sorted(team_events, key=lambda x: x.game_time_ms):
-            _jump_button(f"{e.game_time_display} - {e.player} (xG {e.xg:.2f})",
+            _jump_button(f"{e.game_time_display} - {_pname(e)} (xG {e.xg:.2f})",
                          e, events, key=f"bc_team_{e.game_time_ms}")
     with col2:
         st.markdown(f"**{label_b} Big Chances**")
         for e in sorted(opp_events, key=lambda x: x.game_time_ms):
-            _jump_button(f"{e.game_time_display} - {e.player} (xG {e.xg:.2f})",
+            _jump_button(f"{e.game_time_display} - {_pname(e)} (xG {e.xg:.2f})",
                          e, events, key=f"bc_opp_{e.game_time_ms}")
 
 
@@ -954,14 +1184,17 @@ def viz_recoveries(events, team, match):
                        line=dict(color="white", width=1))
         pfig.add_annotation(x=(x0+x1)/2, y=28, text=f"<b>{cnt}</b>",
                             showarrow=False, font=dict(color="white", size=16))
-    # Scatter recoveries
-    xs = [_normalize_pos(e.start_x, e.start_y)[0] for e in team_events]
-    ys = [_normalize_pos(e.start_x, e.start_y)[1] for e in team_events]
+    # Scatter recoveries (color by team when Both)
+    teams_in = sorted({e.team for e in team_events})
+    team_color_map = {t: c for t, c in zip(teams_in, ["#16a085", "#e67e22"])}
+    xs = [e.start_x for e in team_events]
+    ys = [e.start_y for e in team_events]
     cds = list(range(len(team_events)))
-    hovers = [f"{e.game_time_display} - {e.player}" for e in team_events]
+    hovers = [f"{e.game_time_display} - {e.team} - {_pname(e)}" for e in team_events]
+    colors = [team_color_map.get(e.team, "#16a085") for e in team_events]
     pfig.add_trace(go.Scatter(
         x=xs, y=ys, mode="markers",
-        marker=dict(size=10, color="#16a085", line=dict(color="white", width=1.5)),
+        marker=dict(size=10, color=colors, line=dict(color="white", width=1.5)),
         customdata=cds, hovertext=hovers, hoverinfo="text", name="Recovery",
     ))
     result = st.plotly_chart(pfig, use_container_width=True, key="rec_pitch",
@@ -969,13 +1202,48 @@ def viz_recoveries(events, team, match):
     idx_map = {i: e for i, e in enumerate(team_events)}
     _handle_plotly_click(result, "rec_pitch", idx_map, events)
 
+    # ---- Per-team, per-player recovery bar chart ----
+    st.markdown("---")
+    st.markdown("**Recoveries Per Player**")
+    if team == BOTH_LABEL:
+        groups = [(match.home_team, [e for e in team_events if e.team == match.home_team]),
+                  (match.away_team, [e for e in team_events if e.team == match.away_team])]
+    else:
+        groups = [(team, team_events)]
+    for team_name, evts in groups:
+        st.markdown(f"*{team_name}*")
+        pc = Counter(e.player for e in evts)
+        if not pc:
+            st.caption("No recoveries.")
+            continue
+        players_sorted = [p for p, _ in pc.most_common()]
+        labels = [_match_player_label(match, p) for p in players_sorted]
+        counts = [pc[p] for p in players_sorted]
+        bar_fig = go.Figure()
+        bar_fig.add_trace(go.Bar(
+            x=counts, y=labels, orientation="h",
+            marker=dict(color=team_color_map.get(team_name, "#16a085")),
+            hovertemplate="<b>%{y}</b>: %{x} recoveries<extra></extra>",
+        ))
+        bar_fig.update_layout(
+            height=max(180, 28 * len(labels) + 60),
+            xaxis=dict(title="Recoveries"),
+            yaxis=dict(autorange="reversed"),
+            margin=dict(l=10, r=10, t=10, b=30),
+            plot_bgcolor="white",
+            showlegend=False,
+        )
+        st.plotly_chart(bar_fig, use_container_width=True,
+                        key=f"rec_player_bar_{team_name}")
+
     # Expandable list per third
+    st.markdown("---")
     st.markdown("**Clips by Third**")
     for zone in order:
         zone_events = [c[0] for c in classified if c[1] == zone]
         with st.expander(f"{zone} ({len(zone_events)})"):
             for e in zone_events:
-                _jump_button(f"{e.game_time_display} - {e.player}", e, events,
+                _jump_button(f"{e.game_time_display} - {e.team} - {_pname(e)}", e, events,
                              key=f"rec_{zone}_{e.game_time_ms}_{e.player}")
 
 
@@ -993,24 +1261,34 @@ def viz_interceptions(events, team, match):
                      key=lambda p: -sum(1 for e in team_events if e.player == p))
     player_counts = Counter(e.player for e in team_events)
 
-    options = ["All Players"] + [f"{p} ({player_counts[p]})" for p in players]
+    # Map display label -> player_name so we can filter internally by canonical name
+    display_to_player = {}
+    options = ["All Players"]
+    for p in players:
+        label = f"{_match_player_label(match, p)} ({player_counts[p]})"
+        options.append(label)
+        display_to_player[label] = p
     selected = st.selectbox("Player filter", options, key="int_player")
     if selected == "All Players":
         filt_events = team_events
     else:
-        player_name = selected.rsplit(" (", 1)[0]
+        player_name = display_to_player.get(selected, "")
         filt_events = [e for e in team_events if e.player == player_name]
 
     st.markdown(f"**Interception Locations ({len(filt_events)})**")
 
     pfig = _plotly_pitch(fig_height=420)
-    xs = [_normalize_pos(e.start_x, e.start_y)[0] for e in filt_events]
-    ys = [_normalize_pos(e.start_x, e.start_y)[1] for e in filt_events]
+    # Color by team when Both
+    team_color_map = {t: c for t, c in zip(sorted({e.team for e in filt_events}),
+                                             ["#2980b9", "#e67e22"])}
+    xs = [e.start_x for e in filt_events]
+    ys = [e.start_y for e in filt_events]
     cds = list(range(len(filt_events)))
-    hovers = [f"{e.game_time_display} - {e.player}" for e in filt_events]
+    hovers = [f"{e.game_time_display} - {e.team} - {_pname(e)}" for e in filt_events]
+    colors = [team_color_map.get(e.team, "#2980b9") for e in filt_events]
     pfig.add_trace(go.Scatter(
         x=xs, y=ys, mode="markers",
-        marker=dict(size=12, color="#2980b9", line=dict(color="white", width=1.5)),
+        marker=dict(size=12, color=colors, line=dict(color="white", width=1.5)),
         customdata=cds, hovertext=hovers, hoverinfo="text", name="Interception",
     ))
     result = st.plotly_chart(pfig, use_container_width=True, key="int_pitch",
@@ -1018,23 +1296,44 @@ def viz_interceptions(events, team, match):
     idx_map = {i: e for i, e in enumerate(filt_events)}
     _handle_plotly_click(result, "int_pitch", idx_map, events)
 
-    # Player bar chart
+    # Player bar chart (per team when Both)
     st.markdown("---")
-    fig, ax = plt.subplots(figsize=(8, 3.2))
-    counts = [player_counts[p] for p in players]
-    ax.barh(range(len(players)), counts, color="#2980b9")
-    ax.set_yticks(range(len(players)))
-    ax.set_yticklabels([p.split()[-1] for p in players], fontsize=9)
-    ax.set_xlabel("Interceptions")
-    ax.invert_yaxis()
-    plt.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
+    st.markdown("**Interceptions Per Player**")
+    if team == BOTH_LABEL:
+        groups = [(match.home_team, [e for e in team_events if e.team == match.home_team]),
+                  (match.away_team, [e for e in team_events if e.team == match.away_team])]
+    else:
+        groups = [(team, team_events)]
+    for team_name, evts in groups:
+        st.markdown(f"*{team_name}*")
+        pc = Counter(e.player for e in evts)
+        if not pc:
+            st.caption("None.")
+            continue
+        players_sorted = [p for p, _ in pc.most_common()]
+        labels = [_match_player_label(match, p) for p in players_sorted]
+        counts = [pc[p] for p in players_sorted]
+        bar_fig = go.Figure()
+        bar_fig.add_trace(go.Bar(
+            x=counts, y=labels, orientation="h",
+            marker=dict(color=team_color_map.get(team_name, "#2980b9")),
+            hovertemplate="<b>%{y}</b>: %{x} interceptions<extra></extra>",
+        ))
+        bar_fig.update_layout(
+            height=max(180, 28 * len(labels) + 60),
+            xaxis=dict(title="Interceptions"),
+            yaxis=dict(autorange="reversed"),
+            margin=dict(l=10, r=10, t=10, b=30),
+            plot_bgcolor="white",
+            showlegend=False,
+        )
+        st.plotly_chart(bar_fig, use_container_width=True,
+                        key=f"int_player_bar_{team_name}")
 
     # List
     st.markdown("**Clips**")
     for e in filt_events:
-        _jump_button(f"{e.game_time_display} - {e.player}", e, events,
+        _jump_button(f"{e.game_time_display} - {e.team} - {_pname(e)}", e, events,
                      key=f"int_clip_{e.game_time_ms}_{e.player}")
 
 
@@ -1057,7 +1356,7 @@ def viz_key_passes(events, team, match):
     st.markdown(f"**Key Passes ({title_suffix})** - click an arrow endpoint to watch")
     st.caption("Arrows point from the pass origin to the shot-preparing delivery. Tap the endpoint dot.")
 
-    fig = _plotly_pitch(fig_height=500, xrange=(0, 52.5), yrange=(-34, 34))
+    fig = _plotly_pitch(fig_height=520, xrange=(-5, 55), yrange=(-34, 34), outline=False)
 
     # Colour by team so Both mode is readable
     team_colors = {}
@@ -1082,7 +1381,7 @@ def viz_key_passes(events, team, match):
         )
         xs.append(ex); ys.append(ey); cds.append(i); colors.append(color)
         hovers.append(
-            f"{e.game_time_display} - {e.team}<br>{e.player} → {e.receiver or '?'}<br>{e.sub_type} ({e.result})"
+            f"{e.game_time_display} - {e.team}<br>{_pname(e)} → {_rname(e) or '?'}<br>{e.sub_type} ({e.result})"
         )
 
     fig.add_trace(go.Scatter(
@@ -1103,9 +1402,11 @@ def viz_key_passes(events, team, match):
     passer_counts = Counter(e.player for e in team_events)
     st.markdown("**Passers**")
     for player, cnt in passer_counts.most_common():
-        with st.expander(f"{player} ({cnt})"):
+        label_p = _match_player_label(match, player)
+        with st.expander(f"{label_p} ({cnt})"):
             for e in [x for x in team_events if x.player == player]:
-                label = f"{e.game_time_display} - {e.team} → {e.receiver or '?'}"
+                tgt = _rname(e) or "?"
+                label = f"{e.game_time_display} - {e.team} → {tgt}"
                 _jump_button(label, e, events, key=f"kp_{e.game_time_ms}_{e.player}")
 
 
@@ -1234,7 +1535,7 @@ def main():
             st.info(f"No {event_type_label.lower()} events in this match.")
         else:
             if events:
-                event_labels = [f"{e.game_time_display} - {e.team} - {e.player}" for e in events]
+                event_labels = [f"{e.game_time_display} - {e.team} - {_pname(e)}" for e in events]
                 # Derive initial index (either from pending consumption or current state)
                 init_idx = st.session_state.get("__initial_event_idx",
                                                   st.session_state["selected_event_idx"])
@@ -1252,14 +1553,14 @@ def main():
 
             if direct_event:
                 event = direct_event
-                st.info(f"Playing: {event.game_time_display} - {event.event_type} - {event.team} - {event.player}")
+                st.info(f"Playing: {event.game_time_display} - {event.event_type} - {event.team} - {_pname(event)}")
             else:
                 event = events[selected_event_idx]
 
             show_video_for_event(match, event)
 
             # Details
-            st.markdown(f"**{event.game_time_display}** | {event.team} | {event.player}")
+            st.markdown(f"**{event.game_time_display}** | {event.team} | {_pname(event)}")
             detail_cols = st.columns(4)
             with detail_cols[0]:
                 st.metric("Result", event.result.replace("_", " ").title())
@@ -1268,7 +1569,7 @@ def main():
                     st.metric("xG", f"{event.xg:.3f}")
             with detail_cols[2]:
                 if event.receiver and event.receiver != "NOT_APPLICABLE":
-                    st.metric("Receiver", event.receiver.split()[-1])
+                    st.metric("Receiver", _rname(event) or event.receiver)
             with detail_cols[3]:
                 if event.body_part and event.body_part != "NOT_APPLICABLE":
                     st.metric("Body Part", event.body_part.replace("_", " ").title())
