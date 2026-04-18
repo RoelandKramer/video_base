@@ -37,6 +37,8 @@ EVENT_TYPES = {
     "Key Passes": "key_pass",
     "Build-Up": "build_up",
     "Final 3rd": "final_3rd",
+    "Offensive Transitions": "off_transition",
+    "Defensive Transitions": "def_transition",
     "Goals": "goal",
     "Shots on Target": "shot_on_target",
     "Shots Total": "shot",
@@ -900,12 +902,13 @@ def _draw_avg_positions_pitch(avg, match, key):
     if not avg:
         st.caption("No data.")
         return
-    fig = _plotly_pitch(fig_height=360)
+    fig = _plotly_pitch_vertical(fig_height=480)
     for side, color, label in [("h", "#e74c3c", match.home_team),
                                 ("a", "#3498db", match.away_team)]:
         xs, ys, txt = [], [], []
         for pid, (x, y, s) in avg[side].items():
-            xs.append(x); ys.append(y); txt.append(str(s))
+            dx, dy = _v(x, y)
+            xs.append(dx); ys.append(dy); txt.append(str(s))
         if not xs:
             continue
         fig.add_trace(go.Scatter(
@@ -1043,69 +1046,57 @@ def viz_free_kicks(events, team, match):
         st.info(f"No free kicks by {team}.")
         return
 
-    fig = _plotly_pitch(fig_height=420)
+    fig = _plotly_pitch_vertical(fig_height=540)
 
-    # Normalize positions so team always attacks toward x > 0
     shot_xs, shot_ys, shot_cd, shot_hover = [], [], [], []
     cross_xs, cross_ys, cross_cd, cross_hover = [], [], [], []
     pass_xs, pass_ys, pass_cd, pass_hover = [], [], [], []
 
     for i, e in enumerate(team_events):
-        x, y = _normalize_pos(e.start_x, e.start_y)
+        dx, dy = _v(e.start_x, e.start_y)
         hover = f"{e.game_time_display} - {_pname(e)}<br>{e.sub_type} ({e.result})"
         if e.sub_type == "SHOT_FREE_KICK":
-            shot_xs.append(x); shot_ys.append(y); shot_cd.append(i); shot_hover.append(hover)
+            shot_xs.append(dx); shot_ys.append(dy); shot_cd.append(i); shot_hover.append(hover)
         elif "CROSS" in e.sub_type:
-            cross_xs.append(x); cross_ys.append(y); cross_cd.append(i); cross_hover.append(hover)
+            cross_xs.append(dx); cross_ys.append(dy); cross_cd.append(i); cross_hover.append(hover)
         else:
-            pass_xs.append(x); pass_ys.append(y); pass_cd.append(i); pass_hover.append(hover)
+            pass_xs.append(dx); pass_ys.append(dy); pass_cd.append(i); pass_hover.append(hover)
 
     if shot_xs:
         fig.add_trace(go.Scatter(
-            x=shot_xs, y=shot_ys,
-            mode="markers",
+            x=shot_xs, y=shot_ys, mode="markers",
             marker=dict(size=22, color="#f39c12", symbol="star",
                         line=dict(color="white", width=2)),
-            customdata=shot_cd,
-            hovertext=shot_hover, hoverinfo="text",
-            name="FK Shot (boot)",
+            customdata=shot_cd, hovertext=shot_hover, hoverinfo="text",
+            name="FK Shot",
         ))
     if cross_xs:
         fig.add_trace(go.Scatter(
-            x=cross_xs, y=cross_ys,
-            mode="markers",
-            marker=dict(size=20, color="#3498db", symbol="arrow-right",
+            x=cross_xs, y=cross_ys, mode="markers",
+            marker=dict(size=20, color="#3498db", symbol="diamond",
                         line=dict(color="white", width=2)),
-            customdata=cross_cd,
-            hovertext=cross_hover, hoverinfo="text",
+            customdata=cross_cd, hovertext=cross_hover, hoverinfo="text",
             name="FK Cross",
         ))
     if pass_xs:
         fig.add_trace(go.Scatter(
-            x=pass_xs, y=pass_ys,
-            mode="markers",
+            x=pass_xs, y=pass_ys, mode="markers",
             marker=dict(size=14, color="#95a5a6", symbol="circle",
                         line=dict(color="white", width=1)),
-            customdata=pass_cd,
-            hovertext=pass_hover, hoverinfo="text",
+            customdata=pass_cd, hovertext=pass_hover, hoverinfo="text",
             name="FK Pass",
         ))
-    # Attacking-direction indicator: arrow across the top of the pitch
     fig.add_annotation(
-        x=20, y=31, ax=-20, ay=31,
-        xref="x", yref="y", axref="x", ayref="y",
-        showarrow=True, arrowhead=3, arrowsize=1.5, arrowwidth=3,
-        arrowcolor="white", text="",
+        x=0, y=PITCH_X - 2,
+        text="<b>\u2191 ATTACKING \u2191</b>", showarrow=False,
+        font=dict(color="white", size=12),
     )
-    fig.add_annotation(
-        x=0, y=32.5, text="<b>ATTACKING DIRECTION →</b>",
-        showarrow=False, font=dict(color="white", size=13),
-    )
-    fig.update_layout(showlegend=True, legend=dict(bgcolor="rgba(0,0,0,0.3)",
-                                                    font=dict(color="white")))
+    fig.update_layout(showlegend=True,
+                       legend=dict(bgcolor="rgba(0,0,0,0.3)",
+                                    font=dict(color="white")))
     title_tag = "Both" if team == BOTH_LABEL else team
-    st.markdown(f"**Free Kick Threat Map ({title_tag})** - stars=shots, arrows=crosses")
-    st.caption("All free kicks shown as if both teams attack left → right.")
+    st.markdown(f"**Free Kick Threat Map ({title_tag})** \u2014 stars=shots, diamonds=crosses")
+    st.caption("All free kicks shown as if both teams attack upward.")
     result = st.plotly_chart(fig, use_container_width=True, key="fk_map",
                              on_select="rerun", selection_mode="points")
     idx_map = {i: e for i, e in enumerate(team_events)}
@@ -1137,76 +1128,85 @@ def viz_crosses(events, team, match):
         st.info(f"No crosses by {team}.")
         return
 
-    fig = _plotly_pitch(fig_height=420)
-
-    succ_x, succ_y, succ_cd, succ_hover = [], [], [], []
-    fail_x, fail_y, fail_cd, fail_hover = [], [], [], []
-
-    for i, e in enumerate(team_events):
-        x, y = _normalize_pos(e.start_x, e.start_y)
-        hover = f"{e.game_time_display} - {_pname(e)}<br>{e.result}"
-        if e.result == "SUCCESSFUL":
-            succ_x.append(x); succ_y.append(y); succ_cd.append(i); succ_hover.append(hover)
-        else:
-            fail_x.append(x); fail_y.append(y); fail_cd.append(i); fail_hover.append(hover)
-
-    # Add arrows from start to end (short arrows for visual context)
-    for e in team_events:
-        sx, sy = _normalize_pos(e.start_x, e.start_y)
-        ex, ey = _normalize_pos(e.end_x, e.end_y)
-        fig.add_shape(type="line", x0=sx, y0=sy, x1=ex, y1=ey,
-                      line=dict(color="rgba(255,255,255,0.35)", width=1))
-
-    if succ_x:
-        fig.add_trace(go.Scatter(
-            x=succ_x, y=succ_y, mode="markers",
-            marker=dict(size=14, color="#27ae60", line=dict(color="white", width=2)),
-            customdata=succ_cd, hovertext=succ_hover, hoverinfo="text",
-            name="Successful",
-        ))
-    if fail_x:
-        fig.add_trace(go.Scatter(
-            x=fail_x, y=fail_y, mode="markers",
-            marker=dict(size=12, color="#e74c3c", line=dict(color="white", width=1.5)),
-            customdata=fail_cd, hovertext=fail_hover, hoverinfo="text",
-            name="Unsuccessful",
-        ))
-    fig.update_layout(showlegend=True, legend=dict(bgcolor="rgba(0,0,0,0.3)",
-                                                    font=dict(color="white")))
+    tabs = st.tabs(["Cross Origins", "Left / Right Zonal", "Target Zones", "Chances Created"])
 
     title_tag = "Both" if team == BOTH_LABEL else team
-    st.markdown(f"**Cross Origins ({title_tag})** - click a dot to watch")
-    result = st.plotly_chart(fig, use_container_width=True, key="cross_map",
-                             on_select="rerun", selection_mode="points")
-    idx_map = {i: e for i, e in enumerate(team_events)}
-    _handle_plotly_click(result, "cross_map", idx_map, events)
 
-    # ---- Left / Right side zonal maps ----
-    st.markdown("---")
-    st.markdown("**Left & Right Side Crosses (zonal)**")
-    st.caption("Arrows: origin → destination. Green = successful, red = unsuccessful. Click an arrow endpoint.")
-    col_l, col_r = st.columns(2)
-    with col_l:
-        _render_cross_side(team_events, events, side="L", key="cross_side_L")
-    with col_r:
-        _render_cross_side(team_events, events, side="R", key="cross_side_R")
+    with tabs[0]:
+        fig = _plotly_pitch_vertical(fig_height=540)
+        succ_x, succ_y, succ_cd, succ_hover = [], [], [], []
+        fail_x, fail_y, fail_cd, fail_hover = [], [], [], []
+        for i, e in enumerate(team_events):
+            dx, dy = _v(e.start_x, e.start_y)
+            hover = f"{e.game_time_display} - {_pname(e)}<br>{e.result}"
+            if e.result == "SUCCESSFUL":
+                succ_x.append(dx); succ_y.append(dy); succ_cd.append(i); succ_hover.append(hover)
+            else:
+                fail_x.append(dx); fail_y.append(dy); fail_cd.append(i); fail_hover.append(hover)
+        for e in team_events:
+            sx, sy = _v(e.start_x, e.start_y)
+            ex, ey = _v(e.end_x, e.end_y)
+            fig.add_shape(type="line", x0=sx, y0=sy, x1=ex, y1=ey,
+                          line=dict(color="rgba(255,255,255,0.35)", width=1))
+        if succ_x:
+            fig.add_trace(go.Scatter(
+                x=succ_x, y=succ_y, mode="markers",
+                marker=dict(size=14, color="#27ae60", line=dict(color="white", width=2)),
+                customdata=succ_cd, hovertext=succ_hover, hoverinfo="text",
+                name="Successful",
+            ))
+        if fail_x:
+            fig.add_trace(go.Scatter(
+                x=fail_x, y=fail_y, mode="markers",
+                marker=dict(size=12, color="#e74c3c", line=dict(color="white", width=1.5)),
+                customdata=fail_cd, hovertext=fail_hover, hoverinfo="text",
+                name="Unsuccessful",
+            ))
+        fig.update_layout(showlegend=True,
+                           legend=dict(bgcolor="rgba(0,0,0,0.3)",
+                                        font=dict(color="white")))
+        st.markdown(f"**Cross Origins ({title_tag})** \u2014 click a dot to watch")
+        result = st.plotly_chart(fig, use_container_width=True, key="cross_map",
+                                 on_select="rerun", selection_mode="points")
+        idx_map = {i: e for i, e in enumerate(team_events)}
+        _handle_plotly_click(result, "cross_map", idx_map, events)
 
-    # ---- Target zones stacked bar (by player) ----
-    st.markdown("---")
-    st.markdown("**Target Zones (stacked by player)**")
-    _render_cross_target_zones(team_events, events, team, match,
-                                key_prefix="cross_targets")
+    with tabs[1]:
+        st.markdown("**Left & Right Side Crosses (zonal)**")
+        st.caption("Arrows: origin \u2192 destination. Green = successful, red = unsuccessful. "
+                    "Click an arrow endpoint.")
+        col_l, col_r = st.columns(2)
+        with col_l:
+            _render_cross_side(team_events, events, side="L", key="cross_side_L")
+        with col_r:
+            _render_cross_side(team_events, events, side="R", key="cross_side_R")
 
-    # ---- Top-5 biggest chances created from crosses (per team) ----
-    st.markdown("---")
-    st.markdown("**Top 5 Biggest Chances From Crosses (xA)**")
-    _render_top_chances_from_passes(team_events, team, match, events,
-                                     key_prefix="cross_xa", score_fn=_xa_score,
-                                     score_label="xA")
+    with tabs[2]:
+        st.markdown("**Target Zones (per player) \u2014 split by crossing side**")
+        col_tl, col_tr = st.columns(2)
+        with col_tl:
+            st.markdown("*Left-side crosses*")
+            _render_cross_target_zones(
+                [e for e in team_events if e.start_y > 3], events, team, match,
+                key_prefix="cross_targets_L",
+            )
+        with col_tr:
+            st.markdown("*Right-side crosses*")
+            _render_cross_target_zones(
+                [e for e in team_events if e.start_y < -3], events, team, match,
+                key_prefix="cross_targets_R",
+            )
+
+    with tabs[3]:
+        st.markdown("**Top 5 Biggest Chances From Crosses (xA)**")
+        _render_top_chances_from_passes(team_events, team, match, events,
+                                         key_prefix="cross_xa", score_fn=_xa_score,
+                                         score_label="xA")
 
 
 def _render_cross_side(team_events, nav_events, side, key):
-    """Render one flank (Left y>3 or Right y<-3) with origin + destination zones."""
+    """Render one flank (Left y>3 or Right y<-3) on a vertical pitch with
+    destination zones inside the box."""
     side_label = "Left Side" if side == "L" else "Right Side"
     flank = [e for e in team_events if (e.start_y > 3 if side == "L" else e.start_y < -3)]
     st.markdown(f"**{side_label} ({len(flank)})**")
@@ -1214,44 +1214,63 @@ def _render_cross_side(team_events, nav_events, side, key):
         st.caption("No crosses from this side.")
         return
 
-    # Zoomed attacking-half pitch
-    fig = _plotly_pitch(fig_height=380, xrange=(18, 55), yrange=(-34, 34), outline=False)
+    fig = _plotly_pitch_vertical(fig_height=520)
 
-    # Destination zone counts (within the attacking-half zones)
+    # Destination zone counts (attacking-half zones, drawn on vertical pitch)
     dest_counts = Counter()
     for e in flank:
         z = _att_zone_of(e.end_x, e.end_y)
         if z:
             dest_counts[z] += 1
-    _draw_att_zone_counts(fig, dest_counts)
 
-    # Origin strips (sum of crosses by origin region on the flank)
-    # Deep/Mid/Byline bands on this flank
+    zones = _build_att_half_zones()
+    max_cnt = max(dest_counts.values()) if dest_counts else 1
+    for name, (x0, x1, y0, y1) in zones.items():
+        cnt = dest_counts.get(name, 0)
+        if cnt == 0:
+            continue
+        alpha = 0.18 + 0.50 * (cnt / max_cnt)
+        (dx0, dy0) = _v(x0, y0)
+        (dx1, dy1) = _v(x1, y1)
+        vx0, vx1 = sorted((dx0, dx1))
+        vy0, vy1 = sorted((dy0, dy1))
+        fig.add_shape(type="rect", x0=vx0, y0=vy0, x1=vx1, y1=vy1,
+                      fillcolor=f"rgba(255,215,0,{alpha:.2f})",
+                      line=dict(color="rgba(255,255,255,0.4)", width=1),
+                      layer="below")
+        fig.add_annotation(x=(vx0+vx1)/2, y=(vy0+vy1)/2, text=f"<b>{cnt}</b>",
+                           showarrow=False, font=dict(color="white", size=12))
+
+    # Origin bands on the flank (Deep / Mid / Byline along attacking length)
     origin_bands = {
         "Deep":   (17.5, 30),
         "Mid":    (30,   44),
         "Byline": (44,   52.5),
     }
-    # Filter side y-band
-    y0, y1 = (10, 34) if side == "L" else (-34, -10)
+    y0_f, y1_f = (10, 34) if side == "L" else (-34, -10)
     for band, (x0, x1) in origin_bands.items():
         cnt = sum(1 for e in flank if x0 <= e.start_x <= x1
-                  and y0 <= e.start_y <= y1)
+                  and y0_f <= e.start_y <= y1_f)
         if cnt == 0:
             continue
-        fig.add_shape(type="rect", x0=x0, y0=y0, x1=x1, y1=y1,
+        (dx0, dy0) = _v(x0, y0_f)
+        (dx1, dy1) = _v(x1, y1_f)
+        vx0, vx1 = sorted((dx0, dx1))
+        vy0, vy1 = sorted((dy0, dy1))
+        fig.add_shape(type="rect", x0=vx0, y0=vy0, x1=vx1, y1=vy1,
                       fillcolor="rgba(52,152,219,0.18)",
                       line=dict(color="rgba(255,255,255,0.4)", width=1),
                       layer="below")
-        fig.add_annotation(x=(x0+x1)/2, y=(y0+y1)/2, text=f"{band}<br><b>{cnt}</b>",
-                           showarrow=False, font=dict(color="white", size=11))
+        fig.add_annotation(x=(vx0+vx1)/2, y=(vy0+vy1)/2,
+                            text=f"{band}<br><b>{cnt}</b>",
+                            showarrow=False, font=dict(color="white", size=11))
 
     # Arrows + clickable endpoint dots
     xs, ys, cds, hovers, colors = [], [], [], [], []
     for i, e in enumerate(flank):
-        sx, sy = e.start_x, e.start_y
-        ex, ey = e.end_x, e.end_y
         color = "#27ae60" if e.result == "SUCCESSFUL" else "#e74c3c"
+        sx, sy = _v(e.start_x, e.start_y)
+        ex, ey = _v(e.end_x, e.end_y)
         fig.add_annotation(
             x=ex, y=ey, ax=sx, ay=sy,
             xref="x", yref="y", axref="x", ayref="y",
@@ -1274,16 +1293,15 @@ def _render_cross_side(team_events, nav_events, side, key):
 
 
 def _render_cross_target_zones(team_events, nav_events, team, match, key_prefix):
-    """Horizontal stacked bar: rows = target zones, stacks by player."""
+    """Horizontal stacked bar: rows = players, stacks = destination zones."""
     if not team_events:
-        st.caption("No crosses.")
+        st.caption("No crosses from this side.")
         return
 
     def _target_zone(e):
         z = _att_zone_of(e.end_x, e.end_y)
         if z is None:
             return "Outside box"
-        # Rename to football-common terms for display
         rename = {
             "6yd L": "Near post 6yd", "6yd C": "6yd center", "6yd R": "Far post 6yd",
             "Box L": "Near penalty", "Box CL": "Near center",
@@ -1302,45 +1320,48 @@ def _render_cross_target_zones(team_events, nav_events, team, match, key_prefix)
     zone_order = ["Near post 6yd", "6yd center", "Far post 6yd",
                   "Near penalty", "Near center", "Far center", "Far penalty",
                   "Edge L", "Edge C", "Edge R", "Outside box"]
+    # Consistent zone colour palette (matches order)
+    zone_colors = ["#1abc9c", "#27ae60", "#16a085",
+                   "#3498db", "#9b59b6", "#e67e22", "#e74c3c",
+                   "#f1c40f", "#f39c12", "#d35400", "#95a5a6"]
+    zone_color = dict(zip(zone_order, zone_colors))
 
     for team_name, crosses in groups:
         if not crosses:
             continue
-        # (zone, player) -> [events]
+        # (player, zone) -> [events]
         grid = {}
         for e in crosses:
             z = _target_zone(e)
-            grid.setdefault((z, e.player), []).append(e)
+            grid.setdefault((e.player, z), []).append(e)
 
-        # Build player color palette
-        all_players = sorted({e.player for e in crosses})
-        palette = ["#3498db", "#e67e22", "#27ae60", "#9b59b6", "#e74c3c",
-                   "#1abc9c", "#f1c40f", "#34495e", "#16a085", "#d35400",
-                   "#8e44ad", "#2ecc71", "#c0392b", "#7f8c8d"]
-        player_color = {p: palette[i % len(palette)] for i, p in enumerate(all_players)}
+        # Sort players by total crosses
+        players_total = Counter(e.player for e in crosses)
+        players_sorted = [p for p, _ in players_total.most_common()]
+        player_labels = [_match_player_label(match, p) for p in players_sorted]
 
         fig = go.Figure()
-        for p in all_players:
-            xs = [len(grid.get((z, p), [])) for z in zone_order]
+        for z in zone_order:
+            xs = [len(grid.get((p, z), [])) for p in players_sorted]
             if sum(xs) == 0:
                 continue
             fig.add_trace(go.Bar(
-                y=zone_order, x=xs, orientation="h",
-                name=_match_player_label(match, p),
-                marker=dict(color=player_color[p]),
-                customdata=[[z, p] for z in zone_order],
-                hovertemplate="<b>%{y}</b><br>" + _match_player_label(match, p)
-                              + ": %{x}<extra></extra>",
+                y=player_labels, x=xs, orientation="h",
+                name=z,
+                marker=dict(color=zone_color[z]),
+                customdata=[[p, z] for p in players_sorted],
+                hovertemplate="<b>%{y}</b><br>" + z + ": %{x}<extra></extra>",
             ))
         fig.update_layout(
-            barmode="stack", height=max(280, 32 * len(zone_order)),
+            barmode="stack", height=max(220, 26 * len(player_labels) + 100),
             margin=dict(l=10, r=10, t=10, b=30),
             xaxis=dict(title="Crosses"),
             yaxis=dict(autorange="reversed"),
             plot_bgcolor="white",
-            legend=dict(orientation="h", y=-0.15),
+            legend=dict(orientation="h", y=-0.2, font=dict(size=9)),
         )
-        st.markdown(f"*{team_name}*")
+        if team == BOTH_LABEL:
+            st.markdown(f"*{team_name}*")
         chart_key = f"{key_prefix}_{team_name}"
         result = st.plotly_chart(fig, use_container_width=True, key=chart_key,
                                  on_select="rerun", selection_mode="points")
@@ -1350,14 +1371,14 @@ def _render_cross_target_zones(team_events, nav_events, team, match, key_prefix)
                 pt = sel["points"][0]
                 cd = pt.get("customdata")
                 if isinstance(cd, list) and len(cd) == 2:
-                    zone, pname = cd
-                    sig = f"{zone}_{pname}"
+                    pname, zone = cd
+                    sig = f"{pname}_{zone}"
                     ck = f"__consumed_{chart_key}"
                     if st.session_state.get(ck) != sig:
                         st.session_state[ck] = sig
-                        group = grid.get((zone, pname), [])
+                        group = grid.get((pname, zone), [])
                         if group:
-                            idx_key = f"__cycle_{chart_key}_{zone}_{pname}"
+                            idx_key = f"__cycle_{chart_key}_{pname}_{zone}"
                             i = st.session_state.get(idx_key, -1) + 1
                             if i >= len(group):
                                 i = 0
@@ -1528,8 +1549,7 @@ def viz_goals(events, team, match):
 
     st.markdown(f"**{title}**")
 
-    # Zoomed attacking-third pitch (box centered vertically, no outer frame)
-    fig = _plotly_pitch(fig_height=520, xrange=(18, 55), yrange=(-30, 30), outline=False)
+    fig = _plotly_pitch_vertical(fig_height=540)
 
     def find_assist(goal):
         cand = [x for x in match.events
@@ -1545,14 +1565,14 @@ def viz_goals(events, team, match):
     def add_goal_trace(evts, color, name):
         xs, ys, cds, hovers = [], [], [], []
         for i, e in enumerate(evts):
-            x, y = _normalize_pos(e.start_x, e.start_y)
-            xs.append(x); ys.append(y); cds.append(i)
+            dx, dy = _v(e.start_x, e.start_y)
+            xs.append(dx); ys.append(dy); cds.append(i)
             hovers.append(f"{e.game_time_display} - {_pname(e)}<br>xG: {e.xg:.2f}")
             assist = find_assist(e)
             if assist:
-                ax_, ay_ = _normalize_pos(assist.start_x, assist.start_y)
+                ax_, ay_ = _v(assist.start_x, assist.start_y)
                 fig.add_annotation(
-                    x=x, y=y, ax=ax_, ay=ay_,
+                    x=dx, y=dy, ax=ax_, ay=ay_,
                     xref="x", yref="y", axref="x", ayref="y",
                     arrowhead=2, arrowsize=1.5, arrowwidth=2.5,
                     arrowcolor=color, showarrow=True, text="",
@@ -1762,9 +1782,8 @@ def _render_shot_phase_bar(shots, nav_events, key_prefix, match):
         barmode="stack", height=240, margin=dict(l=10, r=10, t=10, b=30),
         xaxis=dict(title="Shots"),
         yaxis=dict(autorange="reversed"),
-        plot_bgcolor="#2b2b2b", paper_bgcolor="#2b2b2b",
-        font=dict(color="white"),
-        legend=dict(orientation="h", y=-0.3, bgcolor="rgba(0,0,0,0)"),
+        plot_bgcolor="white", paper_bgcolor="white",
+        legend=dict(orientation="h", y=-0.3),
     )
     result = st.plotly_chart(fig, use_container_width=True, key=key_prefix,
                              on_select="rerun", selection_mode="points")
@@ -2061,21 +2080,30 @@ def viz_recoveries(events, team, match):
     st.markdown(f"**Recoveries by Pitch Third ({team})**")
     st.plotly_chart(fig, use_container_width=True, key="rec_thirds")
 
-    # Visualize on pitch
-    pfig = _plotly_pitch(fig_height=320)
-    for zone, (x0, x1) in zip(order, [(-52.5, -17.5), (-17.5, 17.5), (17.5, 52.5)]):
+    # Visualize on vertical pitch
+    pfig = _plotly_pitch_vertical(fig_height=520)
+    # Draw thirds as horizontal bands (since pitch is now vertical: length = y-axis)
+    third_bands = [("Defensive Third", (-52.5, -17.5)),
+                    ("Middle Third",    (-17.5,  17.5)),
+                    ("Attacking Third", ( 17.5,  52.5))]
+    max_cnt = max(counts.values()) if counts else 1
+    for zone, (x0_len, x1_len) in third_bands:
         cnt = counts.get(zone, 0)
-        alpha = 0.2 + 0.55 * (cnt / max(counts.values())) if counts else 0.2
-        pfig.add_shape(type="rect", x0=x0, y0=-34, x1=x1, y1=34,
-                       fillcolor=f"rgba(255,255,255,{alpha*0.3})",
+        alpha = 0.2 + 0.55 * (cnt / max_cnt)
+        # Transform: length coords become display-y, width is full (-34..34)
+        pfig.add_shape(type="rect", x0=-34, y0=x0_len, x1=34, y1=x1_len,
+                       fillcolor=f"rgba(255,255,255,{alpha*0.25})",
                        line=dict(color="white", width=1))
-        pfig.add_annotation(x=(x0+x1)/2, y=28, text=f"<b>{cnt}</b>",
-                            showarrow=False, font=dict(color="white", size=16))
-    # Scatter recoveries (color by team when Both)
+        pfig.add_annotation(x=28, y=(x0_len+x1_len)/2,
+                             text=f"<b>{cnt}</b>", showarrow=False,
+                             font=dict(color="white", size=16))
+    # Scatter recoveries (color by team when Both) on vertical pitch
     teams_in = sorted({e.team for e in team_events})
     team_color_map = {t: c for t, c in zip(teams_in, ["#16a085", "#e67e22"])}
-    xs = [e.start_x for e in team_events]
-    ys = [e.start_y for e in team_events]
+    xs, ys = [], []
+    for e in team_events:
+        dx, dy = _v(e.start_x, e.start_y)
+        xs.append(dx); ys.append(dy)
     cds = list(range(len(team_events)))
     hovers = [f"{e.game_time_display} - {e.team} - {_pname(e)}" for e in team_events]
     colors = [team_color_map.get(e.team, "#16a085") for e in team_events]
@@ -2164,12 +2192,13 @@ def viz_interceptions(events, team, match):
 
     st.markdown(f"**Interception Locations ({len(filt_events)})**")
 
-    pfig = _plotly_pitch(fig_height=420)
-    # Color by team when Both
+    pfig = _plotly_pitch_vertical(fig_height=520)
     team_color_map = {t: c for t, c in zip(sorted({e.team for e in filt_events}),
                                              ["#2980b9", "#e67e22"])}
-    xs = [e.start_x for e in filt_events]
-    ys = [e.start_y for e in filt_events]
+    xs, ys = [], []
+    for e in filt_events:
+        dx, dy = _v(e.start_x, e.start_y)
+        xs.append(dx); ys.append(dy)
     cds = list(range(len(filt_events)))
     hovers = [f"{e.game_time_display} - {e.team} - {_pname(e)}" for e in filt_events]
     colors = [team_color_map.get(e.team, "#2980b9") for e in filt_events]
@@ -2243,22 +2272,19 @@ def viz_key_passes(events, team, match):
     st.markdown(f"**Key Passes ({title_suffix})** - click an arrow endpoint to watch")
     st.caption("Arrows point from the pass origin to the shot-preparing delivery. Tap the endpoint dot.")
 
-    fig = _plotly_pitch(fig_height=520)
+    fig = _plotly_pitch_vertical(fig_height=540)
 
-    # Colour by team so Both mode is readable
     team_colors = {}
     if team == BOTH_LABEL:
         team_colors[match.home_team] = "#3498db"
         team_colors[match.away_team] = "#e67e22"
     else:
         team_colors[team] = "#3498db"
-        # Any non-selected team events would be opponents (shouldn't happen after filter)
 
-    # Arrows from start -> end, plus clickable dot at the END (delivery point)
     xs, ys, cds, hovers, colors = [], [], [], [], []
     for i, e in enumerate(team_events):
-        sx, sy = _normalize_pos(e.start_x, e.start_y)
-        ex, ey = _normalize_pos(e.end_x, e.end_y)
+        sx, sy = _v(e.start_x, e.start_y)
+        ex, ey = _v(e.end_x, e.end_y)
         color = team_colors.get(e.team, "#3498db")
         fig.add_annotation(
             x=ex, y=ey, ax=sx, ay=sy,
@@ -2268,7 +2294,7 @@ def viz_key_passes(events, team, match):
         )
         xs.append(ex); ys.append(ey); cds.append(i); colors.append(color)
         hovers.append(
-            f"{e.game_time_display} - {e.team}<br>{_pname(e)} → {_rname(e) or '?'}<br>{e.sub_type} ({e.result})"
+            f"{e.game_time_display} - {e.team}<br>{_pname(e)} \u2192 {_rname(e) or '?'}<br>{e.sub_type} ({e.result})"
         )
 
     fig.add_trace(go.Scatter(
@@ -2307,8 +2333,6 @@ def _in_penalty_box(x, y):
 
 
 def viz_final_third(events, team, match):
-    # `events` is already filtered (passes entering final 3rd by selected team);
-    # pull from match.events for extras like receptions/carries.
     all_passes = [e for e in match.events if e.event_type == "pass"]
     all_carries = [e for e in match.events if e.event_type == "carry"]
     all_crosses = [e for e in match.events if e.event_type in ("cross", "corner", "free_kick")]
@@ -2318,35 +2342,34 @@ def viz_final_third(events, team, match):
             return lst
         return [e for e in lst if e.team == team]
 
-    # 1) Passes into Final 3rd (start_third != 3 and end_third == 3)
-    passes_into = [e for e in _team_filter(all_passes)
-                   if e.end_third == 3 and e.start_third != 3]
+    tabs = st.tabs(["Passes Into F3", "Receptions in F3", "Penalty-Box Entries"])
 
-    st.markdown("**Passes into Final 3rd (stacked: successful vs unsuccessful)**")
-    _render_stacked_player_bar(
-        passes_into, events, team, match,
-        key_prefix="f3_passes",
-        success_pred=lambda e: e.result == "SUCCESSFUL",
-    )
+    with tabs[0]:
+        passes_into = [e for e in _team_filter(all_passes)
+                       if e.end_third == 3 and e.start_third != 3]
+        st.markdown("**Passes into Final 3rd (stacked: successful vs unsuccessful)**")
+        _render_stacked_player_bar(
+            passes_into, events, team, match,
+            key_prefix="f3_passes",
+            success_pred=lambda e: e.result == "SUCCESSFUL",
+        )
 
-    # 2) Receptions in Final 3rd — count receiver completions with end in final third
-    st.markdown("---")
-    st.markdown("**Receptions in Final 3rd (successful only)**")
-    receptions = [e for e in _team_filter(all_passes)
-                  if e.result == "SUCCESSFUL" and e.end_third == 3
-                  and e.receiver and e.receiver != "NOT_APPLICABLE"]
-    _render_reception_bar(receptions, events, team, match,
-                           key_prefix="f3_recv")
+    with tabs[1]:
+        st.markdown("**Receptions in Final 3rd (successful only)**")
+        receptions = [e for e in _team_filter(all_passes)
+                      if e.result == "SUCCESSFUL" and e.end_third == 3
+                      and e.receiver and e.receiver != "NOT_APPLICABLE"]
+        _render_reception_bar(receptions, events, team, match, key_prefix="f3_recv")
 
-    # 3) Penalty Box Entries (passes or carries ending inside box, starting outside)
-    st.markdown("---")
-    st.markdown("**Penalty Box Entries (passes + carries)**")
-    st.caption("Vectors show each entry. Click an arrow endpoint or a player bar to play.")
-    entries = []
-    for e in _team_filter(all_passes) + _team_filter(all_carries) + _team_filter(all_crosses):
-        if _in_penalty_box(e.end_x, e.end_y) and not _in_penalty_box(e.start_x, e.start_y):
-            entries.append(e)
-    _render_box_entries(entries, events, team, match, key_prefix="f3_box")
+    with tabs[2]:
+        st.markdown("**Penalty Box Entries (passes + carries)**")
+        st.caption("Vectors show each entry. Click an arrow endpoint or a player bar to play.")
+        entries = []
+        for e in (_team_filter(all_passes) + _team_filter(all_carries)
+                   + _team_filter(all_crosses)):
+            if _in_penalty_box(e.end_x, e.end_y) and not _in_penalty_box(e.start_x, e.start_y):
+                entries.append(e)
+        _render_box_entries(entries, events, team, match, key_prefix="f3_box")
 
 
 def _render_stacked_player_bar(passes, nav_events, team, match,
@@ -2491,19 +2514,20 @@ def _render_box_entries(entries, nav_events, team, match, key_prefix):
     col_map, col_bar = st.columns([1.2, 1])
 
     with col_map:
-        fig = _plotly_pitch(fig_height=420, xrange=(18, 55), yrange=(-34, 34),
-                            outline=False)
+        fig = _plotly_pitch_vertical(fig_height=520)
         xs, ys, cds, hovers, colors = [], [], [], [], []
         for i, e in enumerate(entries):
             color = "#27ae60" if e.result == "SUCCESSFUL" else "#e74c3c"
             kind = "Carry" if e.event_type == "carry" else "Pass"
+            sx, sy = _v(e.start_x, e.start_y)
+            ex, ey = _v(e.end_x, e.end_y)
             fig.add_annotation(
-                x=e.end_x, y=e.end_y, ax=e.start_x, ay=e.start_y,
+                x=ex, y=ey, ax=sx, ay=sy,
                 xref="x", yref="y", axref="x", ayref="y",
                 showarrow=True, arrowhead=3, arrowsize=1.2, arrowwidth=2,
                 arrowcolor=color, text="", opacity=0.85,
             )
-            xs.append(e.end_x); ys.append(e.end_y); cds.append(i); colors.append(color)
+            xs.append(ex); ys.append(ey); cds.append(i); colors.append(color)
             hovers.append(f"{e.game_time_display} - {_pname(e)} ({kind})")
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="markers",
@@ -2574,31 +2598,31 @@ def viz_build_up(events, team, match):
             return lst
         return [e for e in lst if e.team == team]
 
-    # Passes into the middle third (from defensive third)
-    into_mid = [e for e in _tf(all_passes)
-                if e.start_third == 1 and e.end_third == 2]
-    st.markdown("**Passes into the Middle 3rd**")
-    st.caption("Count per destination zone in the middle third. Green=successful, red=unsuccessful.")
-    _render_pass_zone_map(into_mid, events, key="build_mid",
-                          dest_zone_fn=_mid_third_zone_of,
-                          zone_rects=_mid_third_zones(),
-                          zoom=(-20, 20, -34, 34))
+    tabs = st.tabs(["Progression into Attacking \u2153",
+                     "Progressive Passes",
+                     "Own \u2153 \u2192 Middle \u2153"])
 
-    st.markdown("---")
-    st.markdown("**Passes Defensive 3rd \u2192 Attacking 3rd**")
-    st.caption("Count per destination zone in the attacking third. Direct long-ball progression.")
-    def_to_att = [e for e in _tf(all_passes)
-                  if e.start_third == 1 and e.end_third == 3]
-    _render_pass_zone_map(def_to_att, events, key="build_def2att",
-                          dest_zone_fn=_att_zone_of,
-                          zone_rects=_build_att_half_zones(),
-                          zoom=(18, 55, -34, 34))
+    with tabs[0]:
+        st.markdown("**Passes Landing in the Attacking Third (by zone)**")
+        st.caption("Zones match the reference image \u2014 all on the opponent half. "
+                    "Green = successful, red = unsuccessful.")
+        into_att = [e for e in _tf(all_passes) if e.end_third == 3]
+        _render_pass_zone_map_vertical(into_att, events, key="build_into_att",
+                                        dest_zone_fn=_att_zone_of,
+                                        zone_rects=_build_att_half_zones())
 
-    # Progressive passes (goalProgression >= 10m) with per-player bar + map
-    st.markdown("---")
-    st.markdown("**Progressive Passes** (forward progress \u2265 10 m)")
-    prog = [e for e in _tf(all_passes) if e.goal_progression >= 10]
-    _render_progressive_passes(prog, events, team, match, key_prefix="build_prog")
+    with tabs[1]:
+        st.markdown("**Progressive Passes** (forward progress \u2265 10 m)")
+        prog = [e for e in _tf(all_passes) if e.goal_progression >= 10]
+        _render_progressive_passes(prog, events, team, match, key_prefix="build_prog")
+
+    with tabs[2]:
+        st.markdown("**Own Third \u2192 Middle Third**")
+        st.caption("All passes that originate in the defensive third and finish "
+                    "in the middle third.")
+        into_mid = [e for e in _tf(all_passes)
+                    if e.start_third == 1 and e.end_third == 2]
+        _render_progression_arrows_vertical(into_mid, events, key="build_own2mid")
 
 
 def _mid_third_zones():
@@ -2686,6 +2710,112 @@ def _render_pass_zone_map(passes, nav_events, key, dest_zone_fn, zone_rects, zoo
     _handle_plotly_click(result, key, idx_map, nav_events)
 
 
+def _render_pass_zone_map_vertical(passes, nav_events, key, dest_zone_fn, zone_rects):
+    """Vertical pitch version of the zonal pass map. Zones are attacking-half
+    rectangles (defined in SciSports coords) drawn on the vertical pitch via _v().
+    The GK/goal sits at the TOP of the pitch (team attacks upward)."""
+    if not passes:
+        st.caption("No passes in this category.")
+        return
+    fig = _plotly_pitch_vertical(fig_height=560)
+
+    # Zone counts (success vs fail)
+    zone_stats = {}
+    for e in passes:
+        z = dest_zone_fn(e.end_x, e.end_y)
+        if z is None:
+            continue
+        stat = zone_stats.setdefault(z, {"succ": 0, "fail": 0, "list": []})
+        if e.result == "SUCCESSFUL":
+            stat["succ"] += 1
+        else:
+            stat["fail"] += 1
+        stat["list"].append(e)
+
+    max_total = max((s["succ"]+s["fail"]) for s in zone_stats.values()) if zone_stats else 1
+    # Zone rects are in (x0, x1, y0, y1) SciSports coords — draw on vertical pitch
+    # by transforming corners via _v(x, y) = (-y, x). Rectangle becomes another
+    # rectangle because the transform is axis-swap + sign flip.
+    for name, (x0, x1, y0, y1) in zone_rects.items():
+        stat = zone_stats.get(name)
+        if not stat:
+            continue
+        total = stat["succ"] + stat["fail"]
+        alpha = 0.18 + 0.45 * (total / max_total)
+        # Transform corners
+        (dx0, dy0) = _v(x0, y0)
+        (dx1, dy1) = _v(x1, y1)
+        vx0, vx1 = sorted((dx0, dx1))
+        vy0, vy1 = sorted((dy0, dy1))
+        fig.add_shape(type="rect", x0=vx0, y0=vy0, x1=vx1, y1=vy1,
+                      fillcolor=f"rgba(255,215,0,{alpha:.2f})",
+                      line=dict(color="rgba(255,255,255,0.4)", width=1),
+                      layer="below")
+        fig.add_annotation(
+            x=(vx0+vx1)/2, y=(vy0+vy1)/2,
+            text=f"<b>{total}</b><br><span style='font-size:10px'>"
+                 f"<span style='color:#27ae60'>{stat['succ']}</span>/"
+                 f"<span style='color:#e74c3c'>{stat['fail']}</span></span>",
+            showarrow=False, font=dict(color="white", size=12),
+        )
+
+    # Arrows from start -> end (transformed to vertical coords)
+    xs, ys, cds, colors, hovers = [], [], [], [], []
+    for i, e in enumerate(passes):
+        color = "#27ae60" if e.result == "SUCCESSFUL" else "#e74c3c"
+        sx, sy = _v(e.start_x, e.start_y)
+        ex, ey = _v(e.end_x, e.end_y)
+        fig.add_annotation(
+            x=ex, y=ey, ax=sx, ay=sy,
+            xref="x", yref="y", axref="x", ayref="y",
+            showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.4,
+            arrowcolor=color, text="", opacity=0.55,
+        )
+        xs.append(ex); ys.append(ey); cds.append(i); colors.append(color)
+        hovers.append(f"{e.game_time_display} - {_pname(e)} \u2192 {_rname(e) or '?'}<br>{e.result}")
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="markers",
+        marker=dict(size=9, color=colors, line=dict(color="white", width=1)),
+        customdata=cds, hovertext=hovers, hoverinfo="text",
+        showlegend=False,
+    ))
+    result = st.plotly_chart(fig, use_container_width=True, key=key,
+                             on_select="rerun", selection_mode="points")
+    idx_map = {i: e for i, e in enumerate(passes)}
+    _handle_plotly_click(result, key, idx_map, nav_events)
+
+
+def _render_progression_arrows_vertical(passes, nav_events, key):
+    """Plain arrow-map on a vertical pitch (no zones). Used for own\u2192mid view."""
+    if not passes:
+        st.caption("No passes in this category.")
+        return
+    fig = _plotly_pitch_vertical(fig_height=520)
+    xs, ys, cds, colors, hovers = [], [], [], [], []
+    for i, e in enumerate(passes):
+        color = "#27ae60" if e.result == "SUCCESSFUL" else "#e74c3c"
+        sx, sy = _v(e.start_x, e.start_y)
+        ex, ey = _v(e.end_x, e.end_y)
+        fig.add_annotation(
+            x=ex, y=ey, ax=sx, ay=sy,
+            xref="x", yref="y", axref="x", ayref="y",
+            showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.4,
+            arrowcolor=color, text="", opacity=0.55,
+        )
+        xs.append(ex); ys.append(ey); cds.append(i); colors.append(color)
+        hovers.append(f"{e.game_time_display} - {_pname(e)}<br>{e.result}")
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="markers",
+        marker=dict(size=9, color=colors, line=dict(color="white", width=1)),
+        customdata=cds, hovertext=hovers, hoverinfo="text",
+        showlegend=False,
+    ))
+    result = st.plotly_chart(fig, use_container_width=True, key=key,
+                             on_select="rerun", selection_mode="points")
+    idx_map = {i: e for i, e in enumerate(passes)}
+    _handle_plotly_click(result, key, idx_map, nav_events)
+
+
 def _render_progressive_passes(passes, nav_events, team, match, key_prefix):
     if not passes:
         st.caption("No progressive passes.")
@@ -2749,17 +2879,19 @@ def _render_progressive_passes(passes, nav_events, team, match, key_prefix):
                                 _jump_to_event(plist[i], nav_events)
 
     with col_map:
-        fig = _plotly_pitch(fig_height=460)
+        fig = _plotly_pitch_vertical(fig_height=520)
         xs, ys, cds, hovers, colors = [], [], [], [], []
         for i, e in enumerate(passes):
             color = "#27ae60" if e.result == "SUCCESSFUL" else "#e74c3c"
+            sx, sy = _v(e.start_x, e.start_y)
+            ex, ey = _v(e.end_x, e.end_y)
             fig.add_annotation(
-                x=e.end_x, y=e.end_y, ax=e.start_x, ay=e.start_y,
+                x=ex, y=ey, ax=sx, ay=sy,
                 xref="x", yref="y", axref="x", ayref="y",
                 showarrow=True, arrowhead=3, arrowsize=1, arrowwidth=1.4,
                 arrowcolor=color, text="", opacity=0.6,
             )
-            xs.append(e.end_x); ys.append(e.end_y); cds.append(i); colors.append(color)
+            xs.append(ex); ys.append(ey); cds.append(i); colors.append(color)
             hovers.append(
                 f"{e.game_time_display} - {_pname(e)}<br>"
                 f"+{e.goal_progression:.1f} m progression"
@@ -2775,6 +2907,627 @@ def _render_progressive_passes(passes, nav_events, team, match, key_prefix):
                                   on_select="rerun", selection_mode="points")
         idx_map = {i: e for i, e in enumerate(passes)}
         _handle_plotly_click(result, f"{key_prefix}_map", idx_map, nav_events)
+
+
+# ================================================================
+# VIZ: OFFENSIVE TRANSITIONS (recovery \u2192 what happens next)
+# ================================================================
+
+def _regain_events(match):
+    """All recoveries/interceptions (ball regains)."""
+    return [e for e in match.events if e.event_type in ("recovery", "interception")]
+
+
+def _third_of_length(x):
+    """Classify length-x (SciSports +x = attacking direction) into named third."""
+    if x < -17.5:
+        return "Own Third"
+    if x < 17.5:
+        return "Middle Third"
+    return "Opponent Third"
+
+
+def _third_loss_name(x):
+    """For defensive transitions: where we lost the ball. Att=our attacking 3rd."""
+    if x < -17.5:
+        return "Def 3rd"
+    if x < 17.5:
+        return "Middle 3rd"
+    return "Att 3rd"
+
+
+def _sequence_after(regain, match):
+    """Team-possession chain starting at `regain` (inclusive). Stops when
+    sequenceId changes or the ball changes team."""
+    seq = [e for e in match.events
+           if e.sequence_id == regain.sequence_id
+           and e.team == regain.team
+           and e.game_time_ms >= regain.game_time_ms]
+    seq.sort(key=lambda e: e.game_time_ms)
+    return seq
+
+
+def _creates_scoring_opp(chain, match):
+    """True if the team's sequence ends with a shot/big-chance/goal."""
+    shot_types = {"shot", "shot_on_target", "goal", "big_chance"}
+    return any(e.event_type in shot_types for e in chain)
+
+
+def _first_pass_direction(chain):
+    """Return 'Forward' / 'Square' / 'Backward' for the first pass in the chain,
+    or None if the player didn't pass."""
+    for e in chain[1:]:  # skip the regain itself
+        if e.event_type not in ("pass", "cross", "key_pass", "free_kick", "corner"):
+            continue
+        dx = e.end_x - e.start_x  # +x = forward (team attacks +x)
+        dy = abs(e.end_y - e.start_y)
+        if abs(dx) < 3 and dy < 10:
+            return "Square"
+        if dx > 3:
+            return "Forward"
+        if dx < -3:
+            return "Backward"
+        return "Square"
+    return None
+
+
+def viz_off_transitions(events, team, match):
+    regains = _regain_events(match)
+    if team != BOTH_LABEL:
+        regains = [e for e in regains if e.team == team]
+    if not regains:
+        st.info("No recoveries / interceptions logged.")
+        return
+
+    # Pre-compute sequence chains & outcomes
+    records = []  # list of (regain, chain, opp_created, first_dir)
+    for r in regains:
+        chain = _sequence_after(r, match)
+        records.append({
+            "regain": r,
+            "chain": chain,
+            "created": _creates_scoring_opp(chain, match),
+            "first_dir": _first_pass_direction(chain),
+        })
+
+    tabs = st.tabs(["Start-3rd \u00d7 Scoring Opp",
+                     "First Pass Direction",
+                     "Regain \u2192 Threat Map"])
+
+    with tabs[0]:
+        _render_transitions_third_bar(records, events, key_prefix="off_tr_third",
+                                       third_fn=lambda r: _third_of_length(r.start_x),
+                                       yes_label="Scoring Opp: Yes",
+                                       no_label="Scoring Opp: No",
+                                       outcome_fn=lambda rec: rec["created"])
+
+    with tabs[1]:
+        _render_first_pass_direction(records, events, team, match,
+                                      key_prefix="off_tr_dir")
+
+    with tabs[2]:
+        _render_regain_threat_map(records, events, key="off_tr_map")
+
+
+def _render_transitions_third_bar(records, nav_events, key_prefix, third_fn,
+                                    yes_label, no_label, outcome_fn):
+    """Grouped bar: thirds on x, Yes/No on grouped bars, clickable."""
+    thirds = ["Own Third", "Middle Third", "Opponent Third"]
+    # For defensive: thirds passed as "Def 3rd", "Middle 3rd", "Att 3rd"
+    present = set()
+    grid = {}  # (third, "yes"|"no") -> list of regain events
+    for rec in records:
+        t = third_fn(rec["regain"])
+        present.add(t)
+        out = "yes" if outcome_fn(rec) else "no"
+        grid.setdefault((t, out), []).append(rec["regain"])
+
+    # Derive ordering from whatever the third_fn produces
+    ordered_thirds = [t for t in thirds if t in present] or sorted(present)
+    if not ordered_thirds:
+        # Perhaps the third_fn returns names like "Def 3rd" etc.
+        ordered_thirds = ["Def 3rd", "Middle 3rd", "Att 3rd"]
+        ordered_thirds = [t for t in ordered_thirds if t in present] or sorted(present)
+
+    yes_counts = [len(grid.get((t, "yes"), [])) for t in ordered_thirds]
+    no_counts  = [len(grid.get((t, "no"),  [])) for t in ordered_thirds]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=ordered_thirds, y=yes_counts, name=yes_label,
+        marker=dict(color="#27ae60"),
+        customdata=[[t, "yes"] for t in ordered_thirds],
+        text=yes_counts, textposition="outside",
+    ))
+    fig.add_trace(go.Bar(
+        x=ordered_thirds, y=no_counts, name=no_label,
+        marker=dict(color="#e74c3c"),
+        customdata=[[t, "no"] for t in ordered_thirds],
+        text=no_counts, textposition="outside",
+    ))
+    fig.update_layout(
+        barmode="group", height=320,
+        margin=dict(l=10, r=10, t=10, b=40),
+        xaxis=dict(title="Start 3rd"),
+        yaxis=dict(title="Transitions"),
+        plot_bgcolor="white",
+        legend=dict(orientation="h", y=-0.2),
+    )
+    result = st.plotly_chart(fig, use_container_width=True, key=key_prefix,
+                             on_select="rerun", selection_mode="points")
+    if result:
+        sel = result.get("selection") if isinstance(result, dict) else None
+        if sel and sel.get("points"):
+            pt = sel["points"][0]
+            cd = pt.get("customdata")
+            if isinstance(cd, list) and len(cd) == 2:
+                third, out = cd
+                group = grid.get((third, out), [])
+                if group:
+                    sig = f"{third}_{out}"
+                    ck = f"__consumed_{key_prefix}"
+                    if st.session_state.get(ck) != sig:
+                        st.session_state[ck] = sig
+                        idx_key = f"__cycle_{key_prefix}_{third}_{out}"
+                        i = st.session_state.get(idx_key, -1) + 1
+                        if i >= len(group):
+                            i = 0
+                        st.session_state[idx_key] = i
+                        _jump_to_event(group[i], nav_events)
+
+
+def _render_first_pass_direction(records, nav_events, team, match, key_prefix):
+    """100% stacked horizontal bar: one row per player, stacks = direction share."""
+    # Team split
+    if team == BOTH_LABEL:
+        groups = [(match.home_team, [r for r in records if r["regain"].team == match.home_team]),
+                  (match.away_team, [r for r in records if r["regain"].team == match.away_team])]
+    else:
+        groups = [(team, [r for r in records if r["regain"].team == team])]
+
+    dir_order = ["Forward", "Square", "Backward"]
+    dir_color = {"Forward": "#27ae60", "Square": "#f39c12", "Backward": "#e74c3c"}
+
+    for team_name, recs in groups:
+        by_player = {}
+        for r in recs:
+            d = r["first_dir"]
+            if d is None:
+                continue
+            p = r["regain"].player
+            by_player.setdefault(p, {"Forward": [], "Square": [], "Backward": []})[d].append(r["regain"])
+        if not by_player:
+            st.caption(f"{team_name}: no transitions with a first pass.")
+            continue
+
+        # Sort by total passes desc
+        sorted_players = sorted(
+            by_player.keys(),
+            key=lambda p: -sum(len(by_player[p][d]) for d in dir_order),
+        )
+        labels = [_match_player_label(match, p) for p in sorted_players]
+        # Percentages
+        fig = go.Figure()
+        for d in dir_order:
+            pct, cd = [], []
+            for p in sorted_players:
+                total = sum(len(by_player[p][dd]) for dd in dir_order)
+                val = len(by_player[p][d])
+                pct.append(100 * val / total if total else 0)
+                cd.append([p, d])
+            fig.add_trace(go.Bar(
+                y=labels, x=pct, orientation="h", name=d,
+                marker=dict(color=dir_color[d]),
+                customdata=cd,
+                hovertemplate="<b>%{y}</b><br>" + d + ": %{x:.0f}%<extra></extra>",
+                text=[f"{p:.0f}%" if p >= 8 else "" for p in pct],
+                textposition="inside",
+                textfont=dict(color="white", size=10),
+            ))
+        fig.update_layout(
+            barmode="stack", height=max(220, 28 * len(labels) + 80),
+            margin=dict(l=10, r=10, t=10, b=30),
+            xaxis=dict(title="% of first passes", range=[0, 100]),
+            yaxis=dict(autorange="reversed"),
+            plot_bgcolor="white",
+            legend=dict(orientation="h", y=-0.2),
+        )
+        st.markdown(f"*{team_name}*")
+        chart_key = f"{key_prefix}_{team_name}"
+        result = st.plotly_chart(fig, use_container_width=True, key=chart_key,
+                                  on_select="rerun", selection_mode="points")
+        if result:
+            sel = result.get("selection") if isinstance(result, dict) else None
+            if sel and sel.get("points"):
+                pt = sel["points"][0]
+                cd = pt.get("customdata")
+                if isinstance(cd, list) and len(cd) == 2:
+                    pname, direction = cd
+                    sig = f"{pname}_{direction}"
+                    ck = f"__consumed_{chart_key}"
+                    if st.session_state.get(ck) != sig:
+                        st.session_state[ck] = sig
+                        group = by_player.get(pname, {}).get(direction, [])
+                        if group:
+                            idx_key = f"__cycle_{chart_key}_{pname}_{direction}"
+                            i = st.session_state.get(idx_key, -1) + 1
+                            if i >= len(group):
+                                i = 0
+                            st.session_state[idx_key] = i
+                            _jump_to_event(group[i], nav_events)
+
+
+def _render_regain_threat_map(records, nav_events, key):
+    """Vertical pitch: dot at regain, arrow to chain end, color by time elapsed."""
+    if not records:
+        st.caption("No transitions to map.")
+        return
+    fig = _plotly_pitch_vertical(fig_height=560)
+
+    def _elapsed_sec(chain):
+        if len(chain) < 2:
+            return 0.0
+        return max(0.0, (chain[-1].game_time_ms - chain[0].game_time_ms) / 1000.0)
+
+    xs, ys, cds, colors, hovers = [], [], [], [], []
+    for i, rec in enumerate(records):
+        r = rec["regain"]
+        chain = rec["chain"]
+        end_ev = chain[-1] if chain else r
+        # Color gradient: <10s red (fast break), <25s orange, else blue
+        elapsed = _elapsed_sec(chain)
+        if elapsed < 10:
+            color = "#e74c3c"
+        elif elapsed < 25:
+            color = "#f39c12"
+        else:
+            color = "#3498db"
+        sx, sy = _v(r.start_x, r.start_y)
+        ex, ey = _v(end_ev.end_x or end_ev.start_x, end_ev.end_y or end_ev.start_y)
+        fig.add_annotation(
+            x=ex, y=ey, ax=sx, ay=sy,
+            xref="x", yref="y", axref="x", ayref="y",
+            showarrow=True, arrowhead=3, arrowsize=1.1, arrowwidth=2,
+            arrowcolor=color, text="", opacity=0.7,
+        )
+        xs.append(sx); ys.append(sy); cds.append(i); colors.append(color)
+        shot_label = "\u2605 shot" if rec["created"] else "no shot"
+        hovers.append(
+            f"{r.game_time_display} - {_pname(r)}<br>"
+            f"{elapsed:.1f}s \u2014 {shot_label}"
+        )
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="markers",
+        marker=dict(size=10, color=colors, line=dict(color="white", width=1)),
+        customdata=cds, hovertext=hovers, hoverinfo="text",
+    ))
+    result = st.plotly_chart(fig, use_container_width=True, key=key,
+                             on_select="rerun", selection_mode="points")
+    idx_map = {i: rec["regain"] for i, rec in enumerate(records)}
+    _handle_plotly_click(result, key, idx_map, nav_events)
+    st.caption("Red = fast break (<10s), orange = medium (<25s), blue = slow build-up.")
+
+
+# ================================================================
+# VIZ: DEFENSIVE TRANSITIONS (ball loss \u2192 response)
+# ================================================================
+
+def _loss_events(match, team_filter=None):
+    """Detect where we lost the ball. A loss = the last event of a sequence
+    by this team, if the next event is by the opponent (via recovery/interception).
+    We use the opponent's recovery location as the loss point (SciSports logs it
+    from the recoverer's perspective)."""
+    # Build a (team, game_time) index
+    ev_sorted = sorted(match.events, key=lambda e: (e.game_time_ms, 0))
+    # For each recovery by opponent X, find the most recent event by the other team
+    losses = []
+    for e in ev_sorted:
+        if e.event_type not in ("recovery", "interception"):
+            continue
+        # Opponent team is the one that lost the ball
+        for j in range(ev_sorted.index(e) - 1, -1, -1):
+            prev = ev_sorted[j]
+            if prev.team and prev.team != e.team:
+                # prev represents the losing team's last action
+                losses.append({
+                    "team_lost": prev.team,
+                    "loss_time_ms": prev.game_time_ms,
+                    "loss_x": prev.end_x or prev.start_x,
+                    "loss_y": prev.end_y or prev.start_y,
+                    "regain_event": e,
+                    "loss_event": prev,
+                })
+                break
+    if team_filter:
+        losses = [l for l in losses if l["team_lost"] == team_filter]
+    return losses
+
+
+def _opp_scoring_opp(loss, match):
+    """Did the opponent create a shot within the same sequence after this loss?"""
+    r = loss["regain_event"]
+    shot_types = {"shot", "shot_on_target", "goal", "big_chance"}
+    return any(
+        e.event_type in shot_types and e.team == r.team
+        and e.sequence_id == r.sequence_id
+        and e.game_time_ms >= r.game_time_ms
+        for e in match.events
+    )
+
+
+def _counter_press_active(loss, match, radius=8.0, within_sec=5.0):
+    """True if the losing team made a defensive action (tackle/interception/recovery)
+    within `radius` metres of the loss point and within `within_sec` seconds."""
+    t0 = loss["loss_time_ms"]
+    t1 = t0 + int(within_sec * 1000)
+    lx, ly = loss["loss_x"], loss["loss_y"]
+    team = loss["team_lost"]
+    for e in match.events:
+        if e.team != team:
+            continue
+        if not (t0 <= e.game_time_ms <= t1):
+            continue
+        if e.event_type not in ("recovery", "interception"):
+            continue
+        dx = e.start_x - lx
+        dy = e.start_y - ly
+        if (dx*dx + dy*dy) ** 0.5 <= radius:
+            return True
+    return False
+
+
+def viz_def_transitions(events, team, match):
+    losses = _loss_events(match, team_filter=None if team == BOTH_LABEL else team)
+    if not losses:
+        st.info("No ball losses detected.")
+        return
+
+    # Pre-classify
+    for l in losses:
+        l["opp_created"] = _opp_scoring_opp(l, match)
+        l["counter_pressed"] = _counter_press_active(l, match)
+
+    tabs = st.tabs(["Start-3rd \u00d7 Opp Scoring Opp",
+                     "Counter-Press Map",
+                     "Dual-Media Viewer"])
+
+    # Fake "event-like" records so the shared handler works: use the regain_event
+    # as the clickable (it carries a video timestamp near the loss).
+    records = [{"regain": l["regain_event"], "chain": [],
+                 "created": l["opp_created"],
+                 "first_dir": None,
+                 "_loss": l} for l in losses]
+
+    with tabs[0]:
+        # Classify loss by OUR attacking third (remember per-team events are already
+        # normalized so +x = attacking). loss_x uses losing team's frame.
+        _render_transitions_third_bar(
+            records, events, key_prefix="def_tr_third",
+            third_fn=lambda r_ev: _third_loss_name(
+                next(l["loss_x"] for l in losses if l["regain_event"] is r_ev)),
+            yes_label="Opponent Scoring Opp: Yes",
+            no_label="Opponent Scoring Opp: No",
+            outcome_fn=lambda rec: rec["created"],
+        )
+
+    with tabs[1]:
+        _render_counter_press_map(losses, events, key="def_tr_map")
+
+    with tabs[2]:
+        _render_dual_media_viewer(losses, match, key="def_tr_dual")
+
+
+def _render_counter_press_map(losses, nav_events, key):
+    """Vertical pitch: dot at each loss. Green=counter-pressed, red=dropped off.
+    Small radius circle around each dot to indicate press zone."""
+    if not losses:
+        st.caption("No losses to map.")
+        return
+    fig = _plotly_pitch_vertical(fig_height=560)
+
+    xs, ys, cds, colors, hovers = [], [], [], [], []
+    for i, l in enumerate(losses):
+        dx, dy = _v(l["loss_x"], l["loss_y"])
+        color = "#27ae60" if l["counter_pressed"] else "#e74c3c"
+        # Draw a small ring to indicate the 8m press radius (scaled to display)
+        r_display = 8.0  # in metres, same scale on both axes
+        fig.add_shape(type="circle",
+                       x0=dx - r_display, y0=dy - r_display,
+                       x1=dx + r_display, y1=dy + r_display,
+                       line=dict(color=color, width=1, dash="dot"),
+                       fillcolor=f"rgba({'39,174,96' if l['counter_pressed'] else '231,76,60'},0.08)",
+                       layer="below")
+        xs.append(dx); ys.append(dy); cds.append(i); colors.append(color)
+        hovers.append(
+            f"{l['regain_event'].game_time_display} - lost by {l['team_lost']}<br>"
+            f"{'Counter-pressed' if l['counter_pressed'] else 'Dropped off'}"
+        )
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="markers",
+        marker=dict(size=12, color=colors, line=dict(color="white", width=1.5)),
+        customdata=cds, hovertext=hovers, hoverinfo="text",
+    ))
+    result = st.plotly_chart(fig, use_container_width=True, key=key,
+                             on_select="rerun", selection_mode="points")
+    idx_map = {i: l["regain_event"] for i, l in enumerate(losses)}
+    _handle_plotly_click(result, key, idx_map, nav_events)
+    st.caption("Green = active counter-press within 5s in an 8m radius. "
+                "Red = dropped off.")
+
+
+def _render_dual_media_viewer(losses, match, key):
+    """Side-by-side: mp4 clip + 2D black-and-white tracking canvas driven by a
+    shared scrub slider. Not a true video-driven sync (Streamlit can't subscribe
+    to a native video's timeupdate events), but the slider scrubs both."""
+    st.caption("Select a loss event. The 2D canvas reads positions.json at the "
+                "selected timestamp. The video alongside is cued to the clip.")
+    if not losses:
+        st.caption("No losses.")
+        return
+
+    labels = [f"{l['regain_event'].game_time_display} \u2014 {l['team_lost']}"
+               for l in losses]
+    idx = st.selectbox("Select loss event", range(len(losses)),
+                        format_func=lambda i: labels[i], key=f"{key}_sel")
+    loss = losses[idx]
+
+    col_v, col_m = st.columns([1, 1])
+
+    with col_v:
+        st.markdown("**Match Video**")
+        show_video_for_event(match, loss["regain_event"])
+
+    with col_m:
+        st.markdown("**2D Tracking (black & white)**")
+        pos_path = _positions_path_for_match(match)
+        if not pos_path:
+            st.caption("No tracking data for this match.")
+            return
+        frames = _cached_positions(str(pos_path))
+        if not frames:
+            st.caption("Tracking data empty.")
+            return
+        # Scrub window: 5s before loss \u2192 10s after
+        t0 = max(0, loss["loss_time_ms"] - 5000)
+        t1 = loss["loss_time_ms"] + 10000
+        import bisect
+        frame_ts = [f.get("t", 0) for f in frames]
+        slider_ms = st.slider(
+            "Clip time (ms)",
+            min_value=int(t0), max_value=int(t1),
+            value=int(loss["loss_time_ms"]),
+            step=100, key=f"{key}_slider",
+        )
+        fi = bisect.bisect_left(frame_ts, slider_ms)
+        fi = min(fi, len(frames) - 1)
+        frame = frames[fi] if frames else {}
+        _draw_bw_tracking_pitch(frame, key=f"{key}_canvas")
+
+
+def _draw_bw_tracking_pitch(frame, key):
+    """Black & white 2D pitch with the home/away dots and ball at this frame."""
+    # Black & white colours: lines white, home = filled black, away = outlined black
+    fig = go.Figure()
+    line = "#000000"
+    bg = "#ffffff"
+    fig.add_shape(type="rect", x0=-PITCH_Y, y0=-PITCH_X, x1=PITCH_Y, y1=PITCH_X,
+                   fillcolor=bg, line=dict(color=line, width=2), layer="below")
+    fig.add_shape(type="line", x0=-PITCH_Y, y0=0, x1=PITCH_Y, y1=0,
+                   line=dict(color=line, width=1))
+    fig.add_shape(type="circle", x0=-9.15, y0=-9.15, x1=9.15, y1=9.15,
+                   line=dict(color=line, width=1))
+    for side in (-1, 1):
+        fig.add_shape(type="rect", x0=-20.16, y0=side*52.5,
+                       x1=20.16, y1=side*(52.5-16.5),
+                       line=dict(color=line, width=1))
+        fig.add_shape(type="rect", x0=-9.16, y0=side*52.5,
+                       x1=9.16, y1=side*(52.5-5.5),
+                       line=dict(color=line, width=1))
+    # Dots (transform to vertical display coords)
+    for side_key, symbol, fill in (("h", "circle", "#000000"),
+                                     ("a", "circle-open", "#000000")):
+        xs, ys, txt = [], [], []
+        for pl in frame.get(side_key, []):
+            dx, dy = _v(pl.get("x", 0), pl.get("y", 0))
+            xs.append(dx); ys.append(dy); txt.append(str(pl.get("s", "")))
+        if xs:
+            fig.add_trace(go.Scatter(
+                x=xs, y=ys, mode="markers+text",
+                marker=dict(size=18, color=fill, symbol=symbol,
+                             line=dict(color="#000000", width=1.5)),
+                text=txt, textposition="middle center",
+                textfont=dict(color="#ffffff" if side_key == "h" else "#000000", size=9),
+                hoverinfo="text", showlegend=False,
+            ))
+    # Ball
+    b = frame.get("b") or {}
+    if b:
+        bx, by = _v(b.get("x", 0), b.get("y", 0))
+        fig.add_trace(go.Scatter(
+            x=[bx], y=[by], mode="markers",
+            marker=dict(size=10, color="#ffff00", symbol="circle",
+                         line=dict(color="#000000", width=1.5)),
+            hoverinfo="skip", showlegend=False,
+        ))
+    fig.update_layout(
+        xaxis=dict(range=[-PITCH_Y, PITCH_Y], visible=False),
+        yaxis=dict(range=[-PITCH_X, PITCH_X], visible=False, scaleanchor="x"),
+        plot_bgcolor=bg, paper_bgcolor=bg,
+        margin=dict(l=0, r=0, t=0, b=0), height=520, showlegend=False,
+    )
+    st.plotly_chart(fig, use_container_width=True, key=key)
+
+
+# ================================================================
+# TIMELINE (0-90 min clip navigator)
+# ================================================================
+
+def _render_event_timeline(events, current_idx, key="timeline"):
+    """Draw a 0-90 minute strip with a tick per clip. Click a tick to jump.
+    The currently-selected event is highlighted."""
+    if not events:
+        return
+    xs, colors, sizes, cds, hovers = [], [], [], [], []
+    for i, e in enumerate(events):
+        minute = (e.game_time_ms or 0) / 60000.0
+        xs.append(minute)
+        is_current = (i == current_idx)
+        colors.append("#ffcc00" if is_current else ("#1e88e5" if e.team == events[0].team else "#e53935"))
+        sizes.append(14 if is_current else 9)
+        cds.append(i)
+        hovers.append(f"{e.game_time_display} \u2014 {e.team} \u2014 {_pname(e)}")
+
+    fig = go.Figure()
+    # Baseline
+    fig.add_shape(type="line", x0=0, x1=90, y0=0, y1=0,
+                   line=dict(color="#888", width=2))
+    # Minute tick marks every 15 min
+    for m in (0, 15, 30, 45, 60, 75, 90):
+        fig.add_shape(type="line", x0=m, x1=m, y0=-0.3, y1=0.3,
+                       line=dict(color="#bbb", width=1))
+        fig.add_annotation(x=m, y=-0.8, text=f"{m}'", showarrow=False,
+                            font=dict(size=10, color="#555"))
+    # Half-time marker
+    fig.add_shape(type="line", x0=45, x1=45, y0=-1.2, y1=1.2,
+                   line=dict(color="#aaa", width=1, dash="dot"))
+    # Event dots
+    fig.add_trace(go.Scatter(
+        x=xs, y=[0] * len(xs),
+        mode="markers",
+        marker=dict(size=sizes, color=colors,
+                    line=dict(color="white", width=1)),
+        customdata=cds,
+        hovertext=hovers, hoverinfo="text",
+    ))
+    fig.update_layout(
+        height=90,
+        margin=dict(l=10, r=10, t=5, b=10),
+        plot_bgcolor="white", paper_bgcolor="white",
+        xaxis=dict(range=[-2, 92], showgrid=False, zeroline=False,
+                    showticklabels=False, fixedrange=True),
+        yaxis=dict(range=[-1.5, 1.5], showgrid=False, zeroline=False,
+                    showticklabels=False, fixedrange=True),
+        showlegend=False,
+    )
+    result = st.plotly_chart(fig, use_container_width=True, key=key,
+                             on_select="rerun", selection_mode="points")
+    # Click handling: jump to the clicked event
+    try:
+        sel = (result.get("selection") or {}).get("points") or []
+    except Exception:
+        sel = []
+    if sel:
+        cd = sel[0].get("customdata")
+        target = cd[0] if isinstance(cd, (list, tuple)) else cd
+        if isinstance(target, int) and target != current_idx:
+            # Guard: only act once per click (plotly re-delivers on reruns)
+            consumed_key = f"__consumed_{key}"
+            last = st.session_state.get(consumed_key)
+            signature = (target, sel[0].get("point_index"))
+            if last != signature:
+                st.session_state[consumed_key] = signature
+                st.session_state["pending_event_idx"] = target
+                st.rerun()
 
 
 # ================================================================
@@ -2795,6 +3548,8 @@ VIZ_MAP = {
     "interception": viz_interceptions,
     "build_up": viz_build_up,
     "final_3rd": viz_final_third,
+    "off_transition": viz_off_transitions,
+    "def_transition": viz_def_transitions,
 }
 
 
@@ -2816,6 +3571,16 @@ def _events_for_view(match, event_type):
         return sorted(
             [e for e in match.events
              if e.event_type == "pass" and e.start_third in (1, 2)],
+            key=lambda e: e.game_time_ms,
+        )
+    if event_type == "off_transition":
+        # Ball regains (recovery / interception) as the driver events
+        return sorted(_regain_events(match), key=lambda e: e.game_time_ms)
+    if event_type == "def_transition":
+        # Events marking where we lost the ball (the losing team's last action)
+        loss_dicts = _loss_events(match)
+        return sorted(
+            [l["loss_event"] for l in loss_dicts if l.get("loss_event")],
             key=lambda e: e.game_time_ms,
         )
     return get_events_by_type(match, event_type)
@@ -2846,6 +3611,20 @@ def main():
     [data-testid="stSidebar"] hr {
         border-color: rgba(255, 255, 255, 0.3) !important;
     }
+    /* Compact main layout so the dashboard fits on one screen */
+    .block-container {
+        padding-top: 0.8rem !important;
+        padding-bottom: 0.4rem !important;
+        max-width: 100% !important;
+    }
+    h1, h2, h3 { margin-top: 0.2rem !important; margin-bottom: 0.4rem !important; }
+    .stMarkdown p { margin-bottom: 0.25rem !important; }
+    [data-testid="stMetricValue"] { font-size: 1.05rem !important; }
+    [data-testid="stMetricLabel"] { font-size: 0.7rem !important; }
+    div[data-baseweb="select"] > div { min-height: 30px !important; }
+    .stButton > button { padding: 0.15rem 0.6rem !important; min-height: 30px !important; }
+    .stTabs [data-baseweb="tab-list"] button { padding: 0.25rem 0.6rem !important; }
+    hr { margin: 0.3rem 0 !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -2951,7 +3730,26 @@ def main():
 
             show_video_for_event(match, event)
 
-            # Details
+            # --- Timeline (0-90 min) with clickable ticks ---
+            if events:
+                _render_event_timeline(events, selected_event_idx, key="main_timeline")
+
+            # --- Next button + keyboard nav hint ---
+            nav_cols = st.columns([1, 1, 3])
+            with nav_cols[0]:
+                if st.button("\u23ED Next", key="btn_next_event", use_container_width=True):
+                    nxt = (selected_event_idx + 1) % len(events) if events else 0
+                    st.session_state["pending_event_idx"] = nxt
+                    st.rerun()
+            with nav_cols[1]:
+                if st.button("\u23EE Prev", key="btn_prev_event", use_container_width=True):
+                    prv = (selected_event_idx - 1) % len(events) if events else 0
+                    st.session_state["pending_event_idx"] = prv
+                    st.rerun()
+            with nav_cols[2]:
+                st.caption("Tip: Tab/Shift+Tab to focus Next, then Enter to advance.")
+
+            # Details (compact)
             st.markdown(f"**{event.game_time_display}** | {event.team} | {_pname(event)}")
             detail_cols = st.columns(4)
             with detail_cols[0]:
