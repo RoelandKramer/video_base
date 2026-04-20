@@ -77,6 +77,34 @@ def _jump_to_event(event, all_events):
     st.rerun()
 
 
+def _clear_event_filter():
+    """Remove any active click-driven event filter."""
+    for k in ("event_filter_key", "event_filter_sigs", "event_filter_label"):
+        st.session_state.pop(k, None)
+
+
+def _apply_filter_from_click(group, filter_key, label):
+    """Filter the main event dropdown + timeline to just `group` (a list of
+    Event objects). Clicking the same `filter_key` again toggles it off and
+    restores the full list."""
+    if not group:
+        return
+    active = st.session_state.get("event_filter_key")
+    if active == filter_key:
+        # Toggle off: restore full event list
+        _clear_event_filter()
+        st.session_state.pop("event_selector", None)
+        st.session_state["selected_event_idx"] = 0
+        st.rerun()
+        return
+    sigs = {(e.game_time_ms, e.player) for e in group}
+    st.session_state["event_filter_key"] = filter_key
+    st.session_state["event_filter_sigs"] = sigs
+    st.session_state["event_filter_label"] = label
+    st.session_state["pending_event_idx"] = 0
+    st.rerun()
+
+
 def _jump_button(label, event, all_events, key):
     if st.button(label, key=key, use_container_width=True):
         _jump_to_event(event, all_events)
@@ -489,15 +517,16 @@ _ATT_R_CENTERS = {
 # VIDEO PLAYER
 # ================================================================
 
-def show_video_for_event(match, event):
+def show_video_for_event(match, event, key_suffix=""):
     available = {k: v for k, v in match.cameras.items() if v != "PLACEHOLDER"}
     if not available:
         st.warning("No video files configured for this match.")
         return
 
     camera_names = list(available.keys())
+    radio_key = f"camera_select_{key_suffix}" if key_suffix else "camera_select"
     if len(camera_names) > 1:
-        cam = st.radio("Camera", camera_names, horizontal=True, key="camera_select")
+        cam = st.radio("Camera", camera_names, horizontal=True, key=radio_key)
     else:
         cam = camera_names[0]
 
@@ -772,12 +801,11 @@ def _render_gk_phase_bar(team_events, nav_events, match, key_prefix):
                 if st.session_state.get(ck) != sig:
                     st.session_state[ck] = sig
                     group = phases[phase]
-                    idx_key = f"__cycle_{key_prefix}_{phase}"
-                    i = st.session_state.get(idx_key, -1) + 1
-                    if i >= len(group):
-                        i = 0
-                    st.session_state[idx_key] = i
-                    _jump_to_event(group[i], nav_events)
+                    _apply_filter_from_click(
+                        group,
+                        filter_key=f"{key_prefix}:{phase}",
+                        label=f"Phase: {phase}",
+                    )
 
 
 def _render_gk_receivers(gks, nav_events, match, key):
@@ -827,12 +855,11 @@ def _render_gk_receivers(gks, nav_events, match, key):
                     st.session_state[ck] = sig
                     group = bucket.get(target, [])
                     if group:
-                        idx_key = f"__cycle_{key}_{target}"
-                        i = st.session_state.get(idx_key, -1) + 1
-                        if i >= len(group):
-                            i = 0
-                        st.session_state[idx_key] = i
-                        _jump_to_event(group[i], nav_events)
+                        _apply_filter_from_click(
+                            group,
+                            filter_key=f"{key}:{target}",
+                            label=f"Receiver: {target}",
+                        )
 
 
 def _render_gk_avg_positions(team_events, team, match):
@@ -1028,12 +1055,11 @@ def _render_gk_sequences(team_events, nav_events, team, match):
                     ck = "__consumed_gk_seq_outcome"
                     if st.session_state.get(ck) != sig:
                         st.session_state[ck] = sig
-                        idx_key = f"__cycle_gk_seq_outcome_{cat}"
-                        i = st.session_state.get(idx_key, -1) + 1
-                        if i >= len(matching):
-                            i = 0
-                        st.session_state[idx_key] = i
-                        _jump_to_event(matching[i], nav_events)
+                        _apply_filter_from_click(
+                            matching,
+                            filter_key=f"gk_seq_outcome:{cat}",
+                            label=f"Sequence outcome: {cat}",
+                        )
 
 
 # ================================================================
@@ -1378,12 +1404,11 @@ def _render_cross_target_zones(team_events, nav_events, team, match, key_prefix)
                         st.session_state[ck] = sig
                         group = grid.get((pname, zone), [])
                         if group:
-                            idx_key = f"__cycle_{chart_key}_{pname}_{zone}"
-                            i = st.session_state.get(idx_key, -1) + 1
-                            if i >= len(group):
-                                i = 0
-                            st.session_state[idx_key] = i
-                            _jump_to_event(group[i], nav_events)
+                            _apply_filter_from_click(
+                                group,
+                                filter_key=f"{chart_key}:{pname}:{zone}",
+                                label=f"{pname} \u2192 {zone}",
+                            )
 
 
 def _xa_score(pass_event, shot):
@@ -1800,13 +1825,11 @@ def _render_shot_phase_bar(shots, nav_events, key_prefix, match):
                     st.session_state[ck] = sig
                     group = grid.get((row, outcome), [])
                     if group:
-                        # Cycle: click once plays first; subsequent clicks advance.
-                        idx_key = f"__cycle_{key_prefix}_{row}_{outcome}"
-                        i = st.session_state.get(idx_key, -1) + 1
-                        if i >= len(group):
-                            i = 0
-                        st.session_state[idx_key] = i
-                        _jump_to_event(group[i], nav_events)
+                        _apply_filter_from_click(
+                            group,
+                            filter_key=f"{key_prefix}:{row}:{outcome}",
+                            label=f"{row} / {outcome}",
+                        )
 
 
 def _render_shots_per_player(shots, nav_events, team, match, key_prefix):
@@ -1864,12 +1887,11 @@ def _render_shots_per_player(shots, nav_events, team, match, key_prefix):
                         st.session_state[ck] = sig
                         pshots = [s for s in team_shots if s.player == player_name]
                         if pshots:
-                            idx_key = f"__cycle_{chart_key}_{player_name}"
-                            i = st.session_state.get(idx_key, -1) + 1
-                            if i >= len(pshots):
-                                i = 0
-                            st.session_state[idx_key] = i
-                            _jump_to_event(pshots[i], nav_events)
+                            _apply_filter_from_click(
+                                pshots,
+                                filter_key=f"{chart_key}:{player_name}",
+                                label=f"Shots: {player_name}",
+                            )
 
 
 # ================================================================
@@ -2438,12 +2460,11 @@ def _render_stacked_player_bar(passes, nav_events, team, match,
                         st.session_state[ck] = sig
                         target = players[pname][kind]
                         if target:
-                            idx_key = f"__cycle_{chart_key}_{pname}_{kind}"
-                            i = st.session_state.get(idx_key, -1) + 1
-                            if i >= len(target):
-                                i = 0
-                            st.session_state[idx_key] = i
-                            _jump_to_event(target[i], nav_events)
+                            _apply_filter_from_click(
+                                target,
+                                filter_key=f"{chart_key}:{pname}:{kind}",
+                                label=f"{pname} / {kind}",
+                            )
 
 
 def _render_reception_bar(receptions, nav_events, team, match, key_prefix):
@@ -2498,12 +2519,11 @@ def _render_reception_bar(receptions, nav_events, team, match, key_prefix):
                         st.session_state[ck] = sig
                         recs = [e for e in evts if e.receiver == pname]
                         if recs:
-                            idx_key = f"__cycle_{chart_key}_{pname}"
-                            i = st.session_state.get(idx_key, -1) + 1
-                            if i >= len(recs):
-                                i = 0
-                            st.session_state[idx_key] = i
-                            _jump_to_event(recs[i], nav_events)
+                            _apply_filter_from_click(
+                                recs,
+                                filter_key=f"{chart_key}:{pname}",
+                                label=f"Receptions: {pname}",
+                            )
 
 
 def _render_box_entries(entries, nav_events, team, match, key_prefix):
@@ -2578,12 +2598,11 @@ def _render_box_entries(entries, nav_events, team, match, key_prefix):
                         st.session_state[ck] = sig
                         plist = [e for e in entries if e.player == pname]
                         if plist:
-                            idx_key = f"__cycle_{chart_key}_{pname}"
-                            i = st.session_state.get(idx_key, -1) + 1
-                            if i >= len(plist):
-                                i = 0
-                            st.session_state[idx_key] = i
-                            _jump_to_event(plist[i], nav_events)
+                            _apply_filter_from_click(
+                                plist,
+                                filter_key=f"{chart_key}:{pname}",
+                                label=f"Box entries: {pname}",
+                            )
 
 
 # ================================================================
@@ -2871,12 +2890,11 @@ def _render_progressive_passes(passes, nav_events, team, match, key_prefix):
                             st.session_state[ck] = sig
                             plist = [e for e in evts if e.player == pname]
                             if plist:
-                                idx_key = f"__cycle_{chart_key}_{pname}"
-                                i = st.session_state.get(idx_key, -1) + 1
-                                if i >= len(plist):
-                                    i = 0
-                                st.session_state[idx_key] = i
-                                _jump_to_event(plist[i], nav_events)
+                                _apply_filter_from_click(
+                                    plist,
+                                    filter_key=f"{chart_key}:{pname}",
+                                    label=f"{pname}",
+                                )
 
     with col_map:
         fig = _plotly_pitch_vertical(fig_height=520)
@@ -3068,12 +3086,12 @@ def _render_transitions_third_bar(records, nav_events, key_prefix, third_fn,
                     ck = f"__consumed_{key_prefix}"
                     if st.session_state.get(ck) != sig:
                         st.session_state[ck] = sig
-                        idx_key = f"__cycle_{key_prefix}_{third}_{out}"
-                        i = st.session_state.get(idx_key, -1) + 1
-                        if i >= len(group):
-                            i = 0
-                        st.session_state[idx_key] = i
-                        _jump_to_event(group[i], nav_events)
+                        out_label = "Scoring Opp" if out == "yes" else "No Scoring Opp"
+                        _apply_filter_from_click(
+                            group,
+                            filter_key=f"{key_prefix}:{third}:{out}",
+                            label=f"{third} \u2192 {out_label}",
+                        )
 
 
 def _render_first_pass_direction(records, nav_events, team, match, key_prefix):
@@ -3149,12 +3167,11 @@ def _render_first_pass_direction(records, nav_events, team, match, key_prefix):
                         st.session_state[ck] = sig
                         group = by_player.get(pname, {}).get(direction, [])
                         if group:
-                            idx_key = f"__cycle_{chart_key}_{pname}_{direction}"
-                            i = st.session_state.get(idx_key, -1) + 1
-                            if i >= len(group):
-                                i = 0
-                            st.session_state[idx_key] = i
-                            _jump_to_event(group[i], nav_events)
+                            _apply_filter_from_click(
+                                group,
+                                filter_key=f"{chart_key}:{pname}:{direction}",
+                                label=f"{pname} \u2014 {direction}",
+                            )
 
 
 def _render_regain_threat_map(records, nav_events, key):
@@ -3371,37 +3388,40 @@ def _render_dual_media_viewer(losses, match, key):
                         format_func=lambda i: labels[i], key=f"{key}_sel")
     loss = losses[idx]
 
-    col_v, col_m = st.columns([1, 1])
+    # Layout: 2D canvas on the LEFT, video on the RIGHT (loads together)
+    col_m, col_v = st.columns([1, 1])
 
-    with col_v:
-        st.markdown("**Match Video**")
-        show_video_for_event(match, loss["regain_event"])
+    # Pre-load tracking data so both columns can render in the same pass
+    pos_path = _positions_path_for_match(match)
+    frames = _cached_positions(str(pos_path)) if pos_path else []
+
+    # Scrub window: 5s before loss -> 10s after
+    t0 = max(0, loss["loss_time_ms"] - 5000)
+    t1 = loss["loss_time_ms"] + 10000
+    slider_ms = st.slider(
+        "Clip time (ms)",
+        min_value=int(t0), max_value=int(t1),
+        value=int(loss["loss_time_ms"]),
+        step=100, key=f"{key}_slider",
+    )
 
     with col_m:
         st.markdown("**2D Tracking (black & white)**")
-        pos_path = _positions_path_for_match(match)
         if not pos_path:
             st.caption("No tracking data for this match.")
-            return
-        frames = _cached_positions(str(pos_path))
-        if not frames:
+        elif not frames:
             st.caption("Tracking data empty.")
-            return
-        # Scrub window: 5s before loss \u2192 10s after
-        t0 = max(0, loss["loss_time_ms"] - 5000)
-        t1 = loss["loss_time_ms"] + 10000
-        import bisect
-        frame_ts = [f.get("t", 0) for f in frames]
-        slider_ms = st.slider(
-            "Clip time (ms)",
-            min_value=int(t0), max_value=int(t1),
-            value=int(loss["loss_time_ms"]),
-            step=100, key=f"{key}_slider",
-        )
-        fi = bisect.bisect_left(frame_ts, slider_ms)
-        fi = min(fi, len(frames) - 1)
-        frame = frames[fi] if frames else {}
-        _draw_bw_tracking_pitch(frame, key=f"{key}_canvas")
+        else:
+            import bisect
+            frame_ts = [f.get("t", 0) for f in frames]
+            fi = bisect.bisect_left(frame_ts, slider_ms)
+            fi = min(fi, len(frames) - 1)
+            frame = frames[fi] if frames else {}
+            _draw_bw_tracking_pitch(frame, key=f"{key}_canvas")
+
+    with col_v:
+        st.markdown("**Match Video**")
+        show_video_for_event(match, loss["regain_event"], key_suffix=f"{key}_vid")
 
 
 def _draw_bw_tracking_pitch(frame, key):
@@ -3671,12 +3691,23 @@ def main():
     else:
         events = [e for e in all_events if e.team == selected_team]
 
-    # Detect event_type/team/match changes and reset event_selector widget state
+    # Detect event_type/team/match changes and reset event_selector widget state.
+    # Also clear any chart-click filter (it is scoped to the previous context).
     current_ctx = (selected_match_idx, event_type, selected_team)
     if st.session_state.get("__last_ctx") != current_ctx:
         st.session_state.pop("event_selector", None)
         st.session_state["selected_event_idx"] = 0
         st.session_state["__last_ctx"] = current_ctx
+        _clear_event_filter()
+
+    # Apply click-driven chart filter, if active
+    filter_sigs = st.session_state.get("event_filter_sigs")
+    if filter_sigs:
+        filtered = [e for e in events if (e.game_time_ms, e.player) in filter_sigs]
+        if filtered:
+            events = filtered
+        else:
+            _clear_event_filter()
 
     # Initial selected index
     if "selected_event_idx" not in st.session_state:
@@ -3701,6 +3732,19 @@ def main():
 
     with col_video:
         direct_event = st.session_state.pop("direct_play_event", None)
+
+        # Chart-click filter chip (click a bar/segment to drill down; click again to clear)
+        flabel = st.session_state.get("event_filter_label")
+        if flabel:
+            chip_c1, chip_c2 = st.columns([4, 1])
+            with chip_c1:
+                st.info(f"\U0001F3AF Filtered: {flabel} \u2014 {len(events)} clip(s)")
+            with chip_c2:
+                if st.button("Clear", key="clear_event_filter", use_container_width=True):
+                    _clear_event_filter()
+                    st.session_state.pop("event_selector", None)
+                    st.session_state["selected_event_idx"] = 0
+                    st.rerun()
 
         if not events and not direct_event:
             st.info(f"No {event_type_label.lower()} events in this match.")
