@@ -287,6 +287,58 @@ def _v(x, y):
     return (-y, x)
 
 
+def _plotly_pitch_attacking_half(fig_height=520):
+    """Horizontal attacking-half pitch: x in [0, 52.5] (halfway line -> goal line).
+    Fills the entire frame (no side padding), locked (no pan/zoom), and drawn
+    so the backline runs fully sideline-to-sideline."""
+    fig = go.Figure()
+    green = "#2d7a3a"
+    line = "#ffffff"
+
+    # Full-frame green (ensures the whole canvas is pitch)
+    fig.add_shape(type="rect", x0=0, y0=-PITCH_Y, x1=PITCH_X, y1=PITCH_Y,
+                  fillcolor=green, line=dict(color=line, width=2), layer="below")
+
+    # Halfway line (left edge of the attacking half)
+    fig.add_shape(type="line", x0=0, y0=-PITCH_Y, x1=0, y1=PITCH_Y,
+                  line=dict(color=line, width=2))
+
+    # Centre-circle arc (half of it, since we only render the attacking half)
+    fig.add_shape(type="circle", x0=-9.15, y0=-9.15, x1=9.15, y1=9.15,
+                  line=dict(color=line, width=2))
+
+    # Penalty box (18-yard): width 40.32 (y: \u00b120.16), depth 16.5
+    fig.add_shape(type="rect",
+                  x0=PITCH_X - 16.5, y0=-20.16, x1=PITCH_X, y1=20.16,
+                  line=dict(color=line, width=2))
+
+    # Six-yard box: width 18.32 (y: \u00b19.16), depth 5.5
+    fig.add_shape(type="rect",
+                  x0=PITCH_X - 5.5, y0=-9.16, x1=PITCH_X, y1=9.16,
+                  line=dict(color=line, width=2))
+
+    # Penalty spot (11 m from goal line)
+    fig.add_shape(type="circle",
+                  x0=PITCH_X - 11 - 0.25, y0=-0.25, x1=PITCH_X - 11 + 0.25, y1=0.25,
+                  line=dict(color=line), fillcolor=line)
+
+    # Goal (a small rectangle at the goal line, 7.32 m wide)
+    fig.add_shape(type="rect",
+                  x0=PITCH_X, y0=-3.66, x1=PITCH_X + 0.6, y1=3.66,
+                  fillcolor=line, line=dict(color=line, width=2))
+
+    fig.update_layout(
+        xaxis=dict(range=[0, PITCH_X + 0.6], visible=False, fixedrange=True),
+        yaxis=dict(range=[-PITCH_Y, PITCH_Y], visible=False, fixedrange=True),
+        plot_bgcolor=green, paper_bgcolor=green,
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=fig_height,
+        showlegend=False,
+        dragmode=False,
+    )
+    return fig
+
+
 # ================================================================
 # ATTACKING HALF ZONES (shared by shots, crosses, final 3rd, passes)
 # ================================================================
@@ -1675,8 +1727,8 @@ def viz_shots(events, team, match, title="Shots"):
     st.markdown(f"**{title} Map - {label_a} ({len(a_f)}) vs {label_b} ({len(b_f)})**")
     st.caption("Click a shot to watch the clip. Dots are colored by phase.")
 
-    # Zoomed attacking-third pitch with zone counts
-    fig = _plotly_pitch(fig_height=520, xrange=(18, 55), yrange=(-34, 34), outline=False)
+    # Attacking-half pitch (horizontal, static, fills the full frame)
+    fig = _plotly_pitch_attacking_half(fig_height=520)
 
     # Zone counts across both teams
     zone_counts = Counter()
@@ -1734,7 +1786,9 @@ def viz_shots(events, team, match, title="Shots"):
                                   orientation="h", y=-0.02))
 
     result = st.plotly_chart(fig, use_container_width=True, key=f"shot_map_{title}",
-                             on_select="rerun", selection_mode="points")
+                             on_select="rerun", selection_mode="points",
+                             config={"displayModeBar": False, "scrollZoom": False,
+                                     "doubleClick": False, "staticPlot": False})
     if result:
         sel = result.get("selection") if isinstance(result, dict) else None
         if sel:
