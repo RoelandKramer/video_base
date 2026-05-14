@@ -1,0 +1,19 @@
+# Streamlit settings for both local dev and Railway.
+# Port/address are overridden by command-line args in Procfile/railway.toml.
+
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+# 1 GB upload limit (default 200 MB); we don't upload but bumping doesn't hurt.
+maxUploadSize = 1024
+# Don't auto-detect file changes in production (saves CPU). Local dev still
+# works because Streamlit reloads on F5.
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#1e3a8a"

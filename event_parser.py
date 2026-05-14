@@ -359,9 +359,18 @@ def discover_matches(data_dir: Path) -> list[Match]:
             except ValueError:
                 pass
 
-        # Load config for this match
+        # Load config for this match. Resolve relative camera paths against
+        # data_dir so videos.json can use bare filenames (works on both local
+        # and Railway/rclone mount).
         match_config = video_config.get(match_prefix, {})
-        cameras = {k: v for k, v in match_config.items() if k != "offset"}
+        cameras = {}
+        for k, v in match_config.items():
+            if k == "offset":
+                continue
+            p = Path(v)
+            if not p.is_absolute():
+                p = data_dir / v
+            cameras[k] = str(p)
         video_offset = match_config.get("offset", 0.0)
 
         # Parse events

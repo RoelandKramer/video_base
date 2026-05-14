@@ -1,20 +1,55 @@
-# Large video files — served from R2 in deployment
+# =================================================================
+# Match data (lives on SharePoint, mounted via rclone on Railway)
+# =================================================================
 *.mp4
+*.mkv
+*.mov
 
+# SciSports raw exports
+*SciSportsEvents*.json
+*SciSportsEvents*.xml
+*SciSportsPositions*.json
+
+# =================================================================
+# Local-only working folders / scratch
+# =================================================================
+example_code_to_be_deleted/
+claude-swap/
+video_c_base/
+.clip_cache/
+kkd_clip_cache/
+
+# rclone binary (75 MB — install via railway shell or apt instead)
+rclone.exe
+rclone
+
+# =================================================================
 # Python
+# =================================================================
 __pycache__/
 *.pyc
 *.pyo
 .venv/
 venv/
+env/
+*.egg-info/
 
-# Streamlit clip cache
-kkd_clip_cache/
-
-# OS
+# =================================================================
+# OS / editors
+# =================================================================
 .DS_Store
 Thumbs.db
-
-# Editors
 .vscode/
 .idea/
+*.swp
+
+# =================================================================
+# Streamlit local cache
+# =================================================================
+.streamlit/secrets.toml
+
+# =================================================================
+# Secrets
+# =================================================================
+.env
+*.local
