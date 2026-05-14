@@ -674,6 +674,140 @@ _DEF_R_ZONES = {
 _NO_NAMES_L = Path(__file__).parent / "no_names_left.png"
 _NO_NAMES_R = Path(__file__).parent / "no_names_right.png"
 
+# ----------------------------------------------------------------
+# New "Zone Figures" pitch images (measured anchor points from white-line
+# detection on each PNG). Each entry maps a metric position (attacking-right
+# normalised: goal at +52.5, sidelines at +-34) to pixel coords on the image.
+#
+#   pixel_x = px_x_center + metric_y * scale_h
+#   pixel_y = px_y_attacking_goal + (52.5 - metric_x) * scale_v        (half-pitch)
+#   pixel_y = px_y_attacking_goal + (52.5 - metric_x) * scale_v_full   (full pitch,
+#       valid for the WHOLE field; own goal then sits at scale_v_full * 105)
+# ----------------------------------------------------------------
+_ZONE_FIG_DIR = Path(__file__).parent / "Zone Figures"
+
+
+def _zf(name):
+    return _ZONE_FIG_DIR / name
+
+
+# Each entry: dict with image path + transform anchors.
+# half_pitch=True means the image only shows the attacking half (~50-55m of
+# length); full_pitch=True means full 105m field.
+_PITCH_IMAGES = {
+    # Half-pitch (attacking goal at top, corner-flag artwork pre-rendered)
+    "sg_left_nozones": dict(
+        path=_zf("nieuw_SG_Links_NoZones.png"),
+        size=(1288, 507),
+        px_x_center=632, scale_h=16.94,
+        px_y_attacking_goal=35, scale_v=20.61, half_pitch=True,
+    ),
+    "sg_right_nozones": dict(
+        path=_zf("nieuw_SG_Rechts_NoZones.png"),
+        size=(1288, 507),
+        px_x_center=632, scale_h=16.94,
+        px_y_attacking_goal=35, scale_v=20.61, half_pitch=True,
+    ),
+    "sg_left_nonames": dict(
+        path=_zf("nieuw_SG_links_NoNames.png"),
+        size=(1288, 507),
+        px_x_center=632, scale_h=16.94,
+        px_y_attacking_goal=35, scale_v=20.61, half_pitch=True,
+    ),
+    "sg_right_nonames": dict(
+        path=_zf("nieuw_SG_rechts_NoNames.png"),
+        size=(1288, 507),
+        px_x_center=632, scale_h=16.94,
+        px_y_attacking_goal=35, scale_v=20.61, half_pitch=True,
+    ),
+
+    # Half-pitch: penalty-box entries (1285 x 987). Penalty area: 290..972 left
+    # of the goal posts at 580/684 (so 6-yd box ±9.16m at 469/790 — verified).
+    "pb_entries": dict(
+        path=_zf("penalty_box_entries_zones.png"),
+        size=(1285, 987),
+        px_x_center=631, scale_h=16.92,
+        px_y_attacking_goal=38, scale_v=20.55, half_pitch=True,
+    ),
+
+    # Half-pitch: cross zones (1283 x 982). Same pixel layout as pb_entries.
+    "cross_zones": dict(
+        path=_zf("cross_zones.png"),
+        size=(1283, 982),
+        px_x_center=631, scale_h=16.92,
+        px_y_attacking_goal=33, scale_v=20.55, half_pitch=True,
+    ),
+
+    # Full-pitch vertical (attacking goal at top). 1213 x 1832.
+    # Goal posts at px_x 538/642; sidelines at 54/1144.
+    # px_y_top ~ 30 (top edge) ~ attacking goal line.
+    # Halfway line at px_y ~ 927; own goal line ~ 1791 (1832 - 41 frame).
+    "full_pp": dict(
+        path=_zf("full_field_zones_ProgrPasses-CC-More.png"),
+        size=(1213, 1832),
+        px_x_center=599, scale_h=16.03,
+        px_y_attacking_goal=30, scale_v=15.84, full_pitch=True,
+        px_y_own_goal=1693,
+    ),
+    # Full-pitch vertical (cleaner / zonal). 1227 x 1835. Sidelines at 66/1156.
+    "full_zo": dict(
+        path=_zf("Full_field_zo_zones.png"),
+        size=(1227, 1835),
+        px_x_center=611, scale_h=16.03,
+        px_y_attacking_goal=34, scale_v=15.84, full_pitch=True,
+        px_y_own_goal=1697,
+    ),
+}
+
+
+def _metric_to_pixel(x_m, y_m, image_key):
+    """Map (metric_x, metric_y) -> (pixel_x, pixel_y) for the named image.
+    Linear transform anchored on the goal line and sideline. Returns None when
+    the input is far outside the image's visible area."""
+    cfg = _PITCH_IMAGES.get(image_key)
+    if cfg is None:
+        return None
+    px = cfg["px_x_center"] + y_m * cfg["scale_h"]
+    py = cfg["px_y_attacking_goal"] + (52.5 - x_m) * cfg["scale_v"]
+    return px, py
+
+
+def _pitch_image_size(image_key):
+    cfg = _PITCH_IMAGES.get(image_key)
+    return cfg["size"] if cfg else None
+
+
+def _pitch_image_path(image_key):
+    cfg = _PITCH_IMAGES.get(image_key)
+    return cfg["path"] if cfg else None
+
+
+def _plotly_pitch_image(image_key, fig_height=None):
+    """Build an empty Plotly figure with the named Zone-Figures pitch image
+    as the background, axes set to pixel coordinates and locked (no pan/zoom).
+    Returns (fig, (iw, ih)) — the size is needed by callers to set ranges."""
+    cfg = _PITCH_IMAGES[image_key]
+    iw, ih = cfg["size"]
+    img = _cached_image(str(cfg["path"]))
+    fig = go.Figure()
+    fig.add_layout_image(dict(
+        source=img, xref="x", yref="y",
+        x=0, y=0, sizex=iw, sizey=ih,
+        sizing="stretch", layer="below",
+    ))
+    fig.update_layout(
+        xaxis=dict(range=[0, iw], visible=False, fixedrange=True),
+        yaxis=dict(range=[ih, 0], visible=False, fixedrange=True,
+                    scaleanchor="x"),
+        height=fig_height if fig_height is not None else (
+            int(ih * 0.65) if ih > 1000 else int(ih * 0.85)
+        ),
+        margin=dict(l=0, r=0, t=0, b=0),
+        plot_bgcolor="white", paper_bgcolor="white",
+        showlegend=False, dragmode=False,
+    )
+    return fig, (iw, ih)
+
 
 def _metric_to_def_pixel(x_m, y_m, side):
     """Map a tracking position (attacking-right normalised metres) to pixel
@@ -1411,26 +1545,15 @@ def _vis2_role_map(rows, match, defending_team, nav_events):
         else:
             st.warning("Couldn't locate the matching event for this corner.")
 
-    # Choose the schematic image by the corner-taker's start position
+    # Choose the new Zone-Figures half-pitch by the corner-taker's start side
     match_ev = _find_event_for_corner_row(r, nav_events)
     if match_ev is not None:
         side = _corner_side_from_event(match_ev)
     else:
         side = r.get("corner_side", "L")
-    img_path = _NO_NAMES_L if side == "L" else _NO_NAMES_R
+    image_key = "sg_left_nozones" if side == "L" else "sg_right_nozones"
 
-    fig = go.Figure()
-    try:
-        img = _cached_image(str(img_path))
-        iw, ih = img.size
-    except Exception:
-        st.warning(f"Schematic image not found: {img_path}")
-        return
-    fig.add_layout_image(
-        dict(source=img, xref="x", yref="y",
-             x=0, y=0, sizex=iw, sizey=ih,
-             sizing="stretch", layer="below"),
-    )
+    fig, (iw, ih) = _plotly_pitch_image(image_key, fig_height=420)
 
     # Opponents (attackers) — gray dots, no jersey number
     xa, ya = [], []
@@ -1438,7 +1561,7 @@ def _vis2_role_map(rows, match, defending_team, nav_events):
         p = a.get("position_at_kick") or a.get("position_at_setup")
         if not p:
             continue
-        mapped = _metric_to_def_pixel(p[0], p[1], side)
+        mapped = _metric_to_pixel(p[0], p[1], image_key)
         if mapped is None:
             continue
         xa.append(mapped[0]); ya.append(mapped[1])
@@ -1450,7 +1573,6 @@ def _vis2_role_map(rows, match, defending_team, nav_events):
             name="Opponent", hoverinfo="skip",
         ))
 
-    # Defenders by role (excluding GK — GK is rendered separately, no role)
     role_color = {"MAN": "#e74c3c", "ZONAL": "#27ae60",
                    "SHORT": "#f39c12", "COUNTER": "#9b59b6"}
     role_groups = {}
@@ -1458,7 +1580,7 @@ def _vis2_role_map(rows, match, defending_team, nav_events):
         p = d.get("position_at_kick") or d.get("position_at_setup")
         if not p:
             continue
-        mapped = _metric_to_def_pixel(p[0], p[1], side)
+        mapped = _metric_to_pixel(p[0], p[1], image_key)
         if mapped is None:
             continue
         role_groups.setdefault(d["role"], []).append(
@@ -1477,12 +1599,11 @@ def _vis2_role_map(rows, match, defending_team, nav_events):
             hoverinfo="text", name=role,
         ))
 
-    # Goalkeeper — black distinctive dot, no role label
     gk = r.get("goalkeeper")
     if gk:
         gp = gk.get("position_at_kick") or gk.get("position_at_setup")
         if gp:
-            mapped = _metric_to_def_pixel(gp[0], gp[1], side)
+            mapped = _metric_to_pixel(gp[0], gp[1], image_key)
             if mapped is not None:
                 fig.add_trace(go.Scatter(
                     x=[mapped[0]], y=[mapped[1]],
@@ -1496,10 +1617,9 @@ def _vis2_role_map(rows, match, defending_team, nav_events):
                     hoverinfo="text", name="Goalkeeper",
                 ))
 
-    # Ball delivery point
     end_x, end_y = r["delivery"].get("end_x"), r["delivery"].get("end_y")
     if end_x is not None and end_y is not None:
-        mapped = _metric_to_def_pixel(end_x, end_y, side)
+        mapped = _metric_to_pixel(end_x, end_y, image_key)
         if mapped is not None:
             fig.add_trace(go.Scatter(
                 x=[mapped[0]], y=[mapped[1]], mode="markers",
@@ -1509,14 +1629,8 @@ def _vis2_role_map(rows, match, defending_team, nav_events):
             ))
 
     fig.update_layout(
-        xaxis=dict(range=[0, iw], visible=False, fixedrange=True),
-        yaxis=dict(range=[ih, 0], visible=False, fixedrange=True,
-                    scaleanchor="x"),
-        height=420, margin=dict(l=0, r=0, t=0, b=0),
-        plot_bgcolor="white", paper_bgcolor="white",
         showlegend=True,
         legend=dict(orientation="h", y=-0.05, bgcolor="rgba(0,0,0,0.05)"),
-        dragmode=False,
     )
     st.plotly_chart(fig, use_container_width=True, key="vis2_role_map",
                      config={"displayModeBar": False, "scrollZoom": False,
@@ -1917,28 +2031,17 @@ def _vis7_magnet_board(rows, match, defending_team):
         st.caption("⚠️ Limited historical data — prediction is "
                     "indicative only.")
 
-    # ---- Pitch render (full width, no_names schematic) ----
+    # ---- Pitch render (uses new Zone-Figures schematic with proper scale) ----
     side = pa["corner_side"]
-    img_path = _NO_NAMES_L if side == "L" else _NO_NAMES_R
-    fig = go.Figure()
-    try:
-        img = _cached_image(str(img_path))
-        iw, ih = img.size
-    except Exception:
-        st.warning(f"Schematic image not found: {img_path}")
-        return
-    fig.add_layout_image(
-        dict(source=img, xref="x", yref="y",
-             x=0, y=0, sizex=iw, sizey=ih,
-             sizing="stretch", layer="below"),
-    )
+    image_key = "sg_left_nonames" if side == "L" else "sg_right_nonames"
+    fig, (iw, ih) = _plotly_pitch_image(image_key, fig_height=540)
 
     # Open zones — translucent yellow circles (mapped via metric->pixel)
     for z in prediction.get("open_zones", []):
         zname = z["zone"]
         if zname in _MB_ZONE_CENTRES:
             zx, zy = _MB_ZONE_CENTRES[zname]
-            mapped = _metric_to_def_pixel(zx, zy, side)
+            mapped = _metric_to_pixel(zx, zy, image_key)
             if mapped is not None:
                 fig.add_shape(
                     type="circle",
@@ -1958,7 +2061,7 @@ def _vis7_magnet_board(rows, match, defending_team):
     for a in pa["attackers"]:
         ep = a.get("end_pos")
         if ep:
-            mapped = _metric_to_def_pixel(ep[0], ep[1], side)
+            mapped = _metric_to_pixel(ep[0], ep[1], image_key)
             if mapped is not None:
                 att_jersey_to_endpx[a.get("jersey")] = mapped
     for d in prediction["defenders"]:
@@ -1968,8 +2071,8 @@ def _vis7_magnet_board(rows, match, defending_team):
         tgt = att_jersey_to_endpx.get(mks)
         if not tgt:
             continue
-        d_mapped = _metric_to_def_pixel(d["predicted_position"][0],
-                                          d["predicted_position"][1], side)
+        d_mapped = _metric_to_pixel(d["predicted_position"][0],
+                                      d["predicted_position"][1], image_key)
         if d_mapped is None:
             continue
         fig.add_shape(
@@ -1984,7 +2087,7 @@ def _vis7_magnet_board(rows, match, defending_team):
         ep = a.get("end_pos") or a.get("start_pos")
         if not ep:
             continue
-        mapped = _metric_to_def_pixel(ep[0], ep[1], side)
+        mapped = _metric_to_pixel(ep[0], ep[1], image_key)
         if mapped is None:
             continue
         ax.append(mapped[0]); ay.append(mapped[1])
@@ -2039,8 +2142,8 @@ def _vis7_magnet_board(rows, match, defending_team):
         color = role_colors.get(role, "#34495e")
         dxs, dys, dtxt, dhov = [], [], [], []
         for d in defs:
-            mp = _metric_to_def_pixel(d["predicted_position"][0],
-                                        d["predicted_position"][1], side)
+            mp = _metric_to_pixel(d["predicted_position"][0],
+                                    d["predicted_position"][1], image_key)
             if mp is None:
                 continue
             dxs.append(mp[0]); dys.append(mp[1])
@@ -2057,15 +2160,8 @@ def _vis7_magnet_board(rows, match, defending_team):
             ))
 
     fig.update_layout(
-        xaxis=dict(range=[0, iw], visible=False, fixedrange=True),
-        yaxis=dict(range=[ih, 0], visible=False, fixedrange=True,
-                    scaleanchor="x"),
-        height=540, margin=dict(l=0, r=0, t=0, b=0),
-        plot_bgcolor="white", paper_bgcolor="white",
         showlegend=True,
-        legend=dict(orientation="h", y=-0.04,
-                     bgcolor="rgba(0,0,0,0.05)"),
-        dragmode=False,
+        legend=dict(orientation="h", y=-0.04, bgcolor="rgba(0,0,0,0.05)"),
     )
     st.plotly_chart(fig, use_container_width=True,
                      key=f"mb_pitch_{defending_team}",
@@ -3682,7 +3778,8 @@ def viz_recoveries(events, team, match):
         st.markdown(f"**Recoveries by Pitch Third ({team})**")
         st.plotly_chart(fig, use_container_width=True, key="rec_thirds")
 
-        pfig = _plotly_pitch_vertical(fig_height=520)
+        # Full-pitch image with accurate metric -> pixel mapping
+        pfig, (iw, ih) = _plotly_pitch_image("full_pp", fig_height=520)
         third_bands = [("Defensive Third", (-52.5, -17.5)),
                         ("Middle Third",    (-17.5,  17.5)),
                         ("Attacking Third", ( 17.5,  52.5))]
@@ -3690,29 +3787,42 @@ def viz_recoveries(events, team, match):
         for zone, (x0_len, x1_len) in third_bands:
             cnt = counts.get(zone, 0)
             alpha = 0.2 + 0.55 * (cnt / max_cnt)
-            pfig.add_shape(type="rect", x0=-34, y0=x0_len, x1=34, y1=x1_len,
-                           fillcolor=f"rgba(255,255,255,{alpha*0.25})",
-                           line=dict(color="white", width=1))
-            pfig.add_annotation(x=28, y=(x0_len + x1_len) / 2,
-                                 text=f"<b>{cnt}</b>", showarrow=False,
-                                 font=dict(color="white", size=16))
+            top_px = _metric_to_pixel(x1_len, -34, "full_pp")
+            bot_px = _metric_to_pixel(x0_len,  34, "full_pp")
+            if top_px and bot_px:
+                pfig.add_shape(type="rect",
+                                 x0=top_px[0], y0=top_px[1],
+                                 x1=bot_px[0], y1=bot_px[1],
+                                 fillcolor=f"rgba(255,255,255,{alpha*0.30})",
+                                 line=dict(color="rgba(255,255,255,0.7)", width=1))
+                mid_px = _metric_to_pixel((x0_len + x1_len) / 2, 28, "full_pp")
+                if mid_px:
+                    pfig.add_annotation(x=mid_px[0], y=mid_px[1],
+                                         text=f"<b>{cnt}</b>", showarrow=False,
+                                         font=dict(color="black", size=18,
+                                                    family="Arial Black"))
 
         xs, ys = [], []
         for e in team_events:
-            dx, dy = _v(e.start_x, e.start_y)
-            xs.append(dx); ys.append(dy)
+            mp = _metric_to_pixel(e.start_x, e.start_y, "full_pp")
+            if mp is None:
+                continue
+            xs.append(mp[0]); ys.append(mp[1])
         cds = list(range(len(team_events)))
         hovers = [f"{e.game_time_display} - {e.team} - {_pname(e)}" for e in team_events]
         dot_colors = [team_color_map.get(e.team, "#16a085") for e in team_events]
         pfig.add_trace(go.Scatter(
             x=xs, y=ys, mode="markers",
-            marker=dict(size=10, color=dot_colors,
+            marker=dict(size=12, color=dot_colors,
                          line=dict(color="white", width=1.5)),
             customdata=cds, hovertext=hovers, hoverinfo="text", name="Recovery",
         ))
         result = st.plotly_chart(pfig, use_container_width=True,
                                    key="rec_pitch", on_select="rerun",
-                                   selection_mode="points")
+                                   selection_mode="points",
+                                   config={"displayModeBar": False,
+                                            "scrollZoom": False,
+                                            "doubleClick": False})
         idx_map = {i: e for i, e in enumerate(team_events)}
         _handle_plotly_click(result, "rec_pitch", idx_map, events)
 
@@ -3795,17 +3905,19 @@ def viz_interceptions(events, team, match):
             filt_events = [e for e in team_events if e.player == player_name]
 
         st.markdown(f"**Interception Locations ({len(filt_events)})**")
-        pfig = _plotly_pitch_vertical(fig_height=520)
+        pfig, _ = _plotly_pitch_image("full_pp", fig_height=520)
         xs, ys = [], []
         for e in filt_events:
-            dx, dy = _v(e.start_x, e.start_y)
-            xs.append(dx); ys.append(dy)
+            mp = _metric_to_pixel(e.start_x, e.start_y, "full_pp")
+            if mp is None:
+                continue
+            xs.append(mp[0]); ys.append(mp[1])
         cds = list(range(len(filt_events)))
         hovers = [f"{e.game_time_display} - {e.team} - {_pname(e)}" for e in filt_events]
         dot_colors = [team_color_map.get(e.team, "#2980b9") for e in filt_events]
         pfig.add_trace(go.Scatter(
             x=xs, y=ys, mode="markers",
-            marker=dict(size=12, color=dot_colors,
+            marker=dict(size=14, color=dot_colors,
                          line=dict(color="white", width=1.5)),
             customdata=cds, hovertext=hovers, hoverinfo="text",
             name="Interception",
@@ -3875,7 +3987,7 @@ def viz_key_passes(events, team, match):
     st.markdown(f"**Key Passes ({title_suffix})** - click an arrow endpoint to watch")
     st.caption("Arrows point from the pass origin to the shot-preparing delivery. Tap the endpoint dot.")
 
-    fig = _plotly_pitch_vertical(fig_height=540)
+    fig, _ = _plotly_pitch_image("full_zo", fig_height=600)
 
     team_colors = {}
     if team == BOTH_LABEL:
@@ -3886,8 +3998,11 @@ def viz_key_passes(events, team, match):
 
     xs, ys, cds, hovers, colors = [], [], [], [], []
     for i, e in enumerate(team_events):
-        sx, sy = _v(e.start_x, e.start_y)
-        ex, ey = _v(e.end_x, e.end_y)
+        s_px = _metric_to_pixel(e.start_x, e.start_y, "full_zo")
+        e_px = _metric_to_pixel(e.end_x, e.end_y, "full_zo")
+        if s_px is None or e_px is None:
+            continue
+        sx, sy = s_px; ex, ey = e_px
         color = team_colors.get(e.team, "#3498db")
         fig.add_annotation(
             x=ex, y=ey, ax=sx, ay=sy,
@@ -4761,11 +4876,11 @@ def _render_first_pass_direction(records, nav_events, team, match, key_prefix):
 
 
 def _render_regain_threat_map(records, nav_events, key):
-    """Vertical pitch: dot at regain, arrow to chain end, color by time elapsed."""
+    """Full-pitch image: dot at regain, arrow to chain end, color by elapsed."""
     if not records:
         st.caption("No transitions to map.")
         return
-    fig = _plotly_pitch_vertical(fig_height=560)
+    fig, _ = _plotly_pitch_image("full_pp", fig_height=620)
 
     def _elapsed_sec(chain):
         if len(chain) < 2:
@@ -4777,7 +4892,6 @@ def _render_regain_threat_map(records, nav_events, key):
         r = rec["regain"]
         chain = rec["chain"]
         end_ev = chain[-1] if chain else r
-        # Color gradient: <10s red (fast break), <25s orange, else blue
         elapsed = _elapsed_sec(chain)
         if elapsed < 10:
             color = "#e74c3c"
@@ -4785,8 +4899,12 @@ def _render_regain_threat_map(records, nav_events, key):
             color = "#f39c12"
         else:
             color = "#3498db"
-        sx, sy = _v(r.start_x, r.start_y)
-        ex, ey = _v(end_ev.end_x or end_ev.start_x, end_ev.end_y or end_ev.start_y)
+        s_px = _metric_to_pixel(r.start_x, r.start_y, "full_pp")
+        e_px = _metric_to_pixel(end_ev.end_x or end_ev.start_x,
+                                  end_ev.end_y or end_ev.start_y, "full_pp")
+        if s_px is None or e_px is None:
+            continue
+        sx, sy = s_px; ex, ey = e_px
         fig.add_annotation(
             x=ex, y=ey, ax=sx, ay=sy,
             xref="x", yref="y", axref="x", ayref="y",
@@ -4923,22 +5041,25 @@ def viz_def_transitions(events, team, match):
 
 
 def _render_counter_press_map(losses, nav_events, key):
-    """Vertical pitch: dot at each loss. Green=counter-pressed, red=dropped off.
-    Small radius circle around each dot to indicate press zone."""
+    """Full-pitch image: dot at each loss. Green=counter-pressed, red=dropped off.
+    8m radius circle (computed in pixel space) around each dot."""
     if not losses:
         st.caption("No losses to map.")
         return
-    fig = _plotly_pitch_vertical(fig_height=560)
+    fig, _ = _plotly_pitch_image("full_pp", fig_height=620)
+    cfg = _PITCH_IMAGES["full_pp"]
+    r_px = 8.0 * cfg["scale_v"]  # 8m converted to pixels (vertical scale)
 
     xs, ys, cds, colors, hovers = [], [], [], [], []
     for i, l in enumerate(losses):
-        dx, dy = _v(l["loss_x"], l["loss_y"])
+        mp = _metric_to_pixel(l["loss_x"], l["loss_y"], "full_pp")
+        if mp is None:
+            continue
+        dx, dy = mp
         color = "#27ae60" if l["counter_pressed"] else "#e74c3c"
-        # Draw a small ring to indicate the 8m press radius (scaled to display)
-        r_display = 8.0  # in metres, same scale on both axes
         fig.add_shape(type="circle",
-                       x0=dx - r_display, y0=dy - r_display,
-                       x1=dx + r_display, y1=dy + r_display,
+                       x0=dx - r_px, y0=dy - r_px,
+                       x1=dx + r_px, y1=dy + r_px,
                        line=dict(color=color, width=1, dash="dot"),
                        fillcolor=f"rgba({'39,174,96' if l['counter_pressed'] else '231,76,60'},0.08)",
                        layer="below")
