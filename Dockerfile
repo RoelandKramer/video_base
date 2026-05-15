@@ -25,4 +25,7 @@ ENV PYTHONUNBUFFERED=1 \
     STREAMLIT_SERVER_ENABLEXSRFPROTECTION=false \
     STREAMLIT_SERVER_ADDRESS=0.0.0.0
 
-CMD ["sh", "-c", "streamlit run app.py --server.port=${PORT:-8080} --server.address=0.0.0.0"]
+# Unset STREAMLIT_SERVER_PORT before launching — some Railway projects inject
+# this as the literal string "$PORT" via shared/project variables, which
+# Streamlit then can't parse. After unsetting, the --server.port arg wins.
+CMD ["sh", "-c", "unset STREAMLIT_SERVER_PORT && streamlit run app.py --server.port=${PORT:-8080} --server.address=0.0.0.0"]
