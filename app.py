@@ -68,19 +68,29 @@ def _events_path_for_match(match):
 #   1. explicit DATA_DIR env var (e.g. a Railway-mounted rclone path) wins
 #   2. ONEDRIVE_* env vars present → run the Graph sync once, cache locally
 #   3. otherwise local dev: use the repo folder
+_BOOTSTRAP_ERROR: list[str] = []   # surfaced inside main() after set_page_config
+
+
 @st.cache_resource(show_spinner="Syncing match metadata from OneDrive…")
 def _bootstrap_data_dir() -> Path:
     explicit = os.environ.get("DATA_DIR", "").strip()
     if explicit:
         return Path(explicit)
-    try:
-        import onedrive_sync
-        if onedrive_sync.is_enabled():
+    # Check env vars BEFORE attempting to import onedrive_sync — that module
+    # pulls in msal, which isn't installed in local-dev environments. Skip
+    # the import entirely when the OneDrive feature is off.
+    onedrive_keys = ("ONEDRIVE_TENANT_ID", "ONEDRIVE_CLIENT_ID",
+                     "ONEDRIVE_CLIENT_SECRET", "ONEDRIVE_USER_EMAIL",
+                     "ONEDRIVE_BASE_FOLDER")
+    if all(os.environ.get(k) for k in onedrive_keys):
+        try:
+            import onedrive_sync
             return onedrive_sync.get_sync().sync_metadata()
-    except Exception as e:
-        # Fall through to local mode so the app still boots and surfaces the
-        # error visibly in the UI rather than crashing the worker.
-        st.error(f"OneDrive sync failed: {e}")
+        except Exception as e:
+            # DO NOT call st.error here — Streamlit would treat that as the
+            # "first command" and break the later set_page_config call.
+            # Stash and surface inside main() instead.
+            _BOOTSTRAP_ERROR.append(str(e))
     return Path(__file__).parent
 
 
@@ -6554,6 +6564,9 @@ def _events_for_view(match, event_type):
 
 def main():
     st.set_page_config(page_title="D&V Team Analysis", layout="wide")
+    # Surface any OneDrive bootstrap error now that set_page_config has run.
+    for _err in _BOOTSTRAP_ERROR:
+        st.error(f"OneDrive sync failed: {_err}")
 
     # Blue sidebar styling
     st.markdown("""
