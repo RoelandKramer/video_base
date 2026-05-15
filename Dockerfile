@@ -16,12 +16,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Then copy the rest of the repo.
 COPY . .
 
-# Railway injects $PORT at runtime — Streamlit binds to it.
+# Railway injects $PORT at runtime — Streamlit must bind to it AND 0.0.0.0.
+# Use `sh -c` so the shell expands $PORT; exec-form CMD (JSON array) doesn't
+# perform variable expansion.
 ENV PYTHONUNBUFFERED=1 \
     STREAMLIT_SERVER_HEADLESS=true \
     STREAMLIT_SERVER_ENABLECORS=false \
-    STREAMLIT_SERVER_ENABLEXSRFPROTECTION=false
+    STREAMLIT_SERVER_ENABLEXSRFPROTECTION=false \
+    STREAMLIT_SERVER_ADDRESS=0.0.0.0
 
-CMD streamlit run app.py \
-    --server.port=${PORT:-8501} \
-    --server.address=0.0.0.0
+CMD ["sh", "-c", "streamlit run app.py --server.port=${PORT:-8080} --server.address=0.0.0.0"]
