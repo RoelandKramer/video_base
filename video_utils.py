@@ -8,7 +8,20 @@ from pathlib import Path
 CLIP_CACHE_DIR = Path(tempfile.gettempdir()) / "kkd_clip_cache"
 
 
+def _resolve_url(video_url: str) -> str:
+    """If the URL is a ``graph:<filename>`` placeholder, swap it for a fresh
+    OneDrive signed download URL. Lives behind a lazy import so this module
+    has no hard dependency on msal/requests when running locally."""
+    if isinstance(video_url, str) and video_url.startswith("graph:"):
+        from onedrive_sync import resolve_video_url
+        return resolve_video_url(video_url)
+    return video_url
+
+
 def get_clip_path(video_url: str, start_sec: float, end_sec: float) -> Path:
+    # IMPORTANT: hash the ORIGINAL url (e.g. "graph:match.mp4"), not the
+    # resolved signed URL — signed URLs change each call and would defeat the
+    # cache.
     key = f"{video_url}_{start_sec:.1f}_{end_sec:.1f}"
     clip_hash = hashlib.md5(key.encode()).hexdigest()[:12]
     return CLIP_CACHE_DIR / f"{clip_hash}.mp4"
@@ -35,10 +48,15 @@ def extract_clip(
 
     CLIP_CACHE_DIR.mkdir(exist_ok=True)
 
+    # Resolve the placeholder to a signed Azure Blob URL JUST before ffmpeg
+    # runs — the URL is good for ~1h, so doing it lazily means we never hand
+    # ffmpeg an expired link.
+    ffmpeg_input = _resolve_url(video_url)
+
     cmd = [
         "ffmpeg",
         "-ss", str(actual_start),
-        "-i", video_url,
+        "-i", ffmpeg_input,
         "-t", str(duration),
         "-c", "copy",
         "-y",

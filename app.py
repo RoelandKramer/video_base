@@ -64,10 +64,27 @@ def _events_path_for_match(match):
     return None
 
 # DATA_DIR holds match files (events JSON, positions JSON, videos via
-# videos.json). Override with the `DATA_DIR` env var on Railway so the app
-# reads from the rclone-mounted SharePoint folder.
-_DATA_DIR_OVERRIDE = os.environ.get("DATA_DIR", "").strip()
-DATA_DIR = Path(_DATA_DIR_OVERRIDE) if _DATA_DIR_OVERRIDE else Path(__file__).parent
+# videos.json). Priority:
+#   1. explicit DATA_DIR env var (e.g. a Railway-mounted rclone path) wins
+#   2. ONEDRIVE_* env vars present → run the Graph sync once, cache locally
+#   3. otherwise local dev: use the repo folder
+@st.cache_resource(show_spinner="Syncing match metadata from OneDrive…")
+def _bootstrap_data_dir() -> Path:
+    explicit = os.environ.get("DATA_DIR", "").strip()
+    if explicit:
+        return Path(explicit)
+    try:
+        import onedrive_sync
+        if onedrive_sync.is_enabled():
+            return onedrive_sync.get_sync().sync_metadata()
+    except Exception as e:
+        # Fall through to local mode so the app still boots and surfaces the
+        # error visibly in the UI rather than crashing the worker.
+        st.error(f"OneDrive sync failed: {e}")
+    return Path(__file__).parent
+
+
+DATA_DIR = _bootstrap_data_dir()
 # Model joblibs ship with the repo, so they always live next to app.py.
 MODELS_DIR = Path(__file__).parent
 LABELING_SHEET_PATH = DATA_DIR / "corner_role_labels.csv"
