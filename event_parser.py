@@ -228,10 +228,21 @@ def _load_json_events(json_path: Path) -> tuple[list[Event], dict]:
         sub = ev.get("subTypeName", "")
         key = (base, sub)
 
-        if key not in EVENT_MAP:
+        event_type = EVENT_MAP.get(key)
+        # Fallback for SciSports set-piece sub-types not in the explicit map:
+        # anything that mentions FREE_KICK or DIRECT_SET_PIECE should still
+        # surface under the Free Kicks tab. Goal kicks similarly.
+        if event_type is None:
+            sub_u = sub.upper()
+            if "FREE_KICK" in sub_u or "SET_PIECE" in sub_u or sub_u == "DIRECT_SET_PIECE":
+                if base in ("PASS", "CROSS", "SHOT"):
+                    event_type = "free_kick"
+            elif "GOAL_KICK" in sub_u and base == "PASS":
+                event_type = "goal_kick"
+
+        if event_type is None:
             continue
 
-        event_type = EVENT_MAP[key]
         events.append(_build_event_from_raw(ev, event_type, player_shirts))
 
         # For shots, also add to goal/on_target/big_chance categories
